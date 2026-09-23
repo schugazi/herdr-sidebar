@@ -19,12 +19,10 @@ use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Layout, Position, Rect};
 use ratatui::style::{Color, Modifier, Style, Stylize};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Clear, List, ListItem, Paragraph, Wrap};
+use ratatui::widgets::{Block, BorderType, Clear, List, ListItem, Padding, Paragraph, Wrap};
 
 use herdr_sidebar::actions::{copy_to_clipboard, open_external, reveal};
-use herdr_sidebar::branch_ui::{
-    BranchPicker, FooterZones, PickerAction, draw_git_footer, sync_glyph,
-};
+use herdr_sidebar::branch_ui::{BranchPicker, PickerAction, sync_glyph};
 use herdr_sidebar::git::{FileEntry, Git, Status};
 use herdr_sidebar::icons::{IconTheme, icon};
 use herdr_sidebar::state::Exit;
@@ -34,14 +32,32 @@ use herdr_sidebar::ui::{
     TitleAction, activity_button_style, activity_icons, branch_icon, chrome_button_style,
     draw_activity_caps, draw_scrollbar, gear_icon, hits, hits_activity_button,
     hits_collapse_button, hover_style, icon_style as ui_icon_style, keep_visible_scroll, palette,
-    selection_style, set_color_theme, sibling_panes_of, sparkle_icon, status_color,
-    title_action_spans, title_actions_visible, title_actions_width, truncate_to, within,
+    repo_icon, selection_style, set_color_theme, sibling_panes_of, sparkle_icon, status_color,
+    sync_icon, title_action_spans, title_actions_visible, title_actions_width, truncate_to, within,
     wrap_footer_message, wrap_hints,
 };
 
 /// How many log lines the history-ish drawers fetch.
 const DRAWER_LIMIT: usize = 30;
-const REPO_HEADER_ACTIONS: &str = " ⇅  ✓ ";
+/// The repo row's fixed-width `sync · commit` icon tail (see
+/// `repo_header_actions`); both glyphs are one cell in every theme.
+const REPO_HEADER_ACTIONS_WIDTH: u16 = 6;
+
+fn repo_header_actions(theme: IconTheme) -> String {
+    format!(" {}  ✓ ", sync_icon(theme))
+}
+
+/// `↑2 ↓1`, omitting zero counts; empty when in sync.
+fn ahead_behind(status: &Status) -> String {
+    let mut counts = Vec::new();
+    if status.ahead > 0 {
+        counts.push(format!("↑{}", status.ahead));
+    }
+    if status.behind > 0 {
+        counts.push(format!("↓{}", status.behind));
+    }
+    counts.join(" ")
+}
 
 /// How long two clicks on the same row still count as a double click (to pin
 /// a diff/show tab), matching the file explorer.
@@ -54,21 +70,18 @@ fn sync_is_primary(status: &Status) -> bool {
         && status.ahead + status.behind > 0
 }
 
-fn sync_label_for_status(status: &Status, syncing: bool) -> Option<String> {
+fn sync_label_for_status(status: &Status, syncing: bool, theme: IconTheme) -> Option<String> {
     if syncing {
-        return Some(format!("{} Syncing…", sync_glyph(true)));
+        return Some(format!("{} Syncing…", sync_glyph(theme, true)));
     }
     if !status.has_upstream || status.ahead + status.behind == 0 {
         return None;
     }
-    let mut counts = Vec::new();
-    if status.ahead > 0 {
-        counts.push(format!("{}↑", status.ahead));
-    }
-    if status.behind > 0 {
-        counts.push(format!("{}↓", status.behind));
-    }
-    Some(format!("⟳ Sync Changes {}", counts.join(" ")))
+    Some(format!(
+        "{} Sync Changes {}",
+        sync_icon(theme),
+        ahead_behind(status)
+    ))
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -118,6 +131,21 @@ impl Drawer {
 
     fn index(self) -> usize {
         Drawer::ALL.iter().position(|d| *d == self).unwrap_or(0)
+    }
+
+    /// Codicons that tell the drawers apart at a glance; the emoji theme
+    /// (no Nerd Font) keeps plain titles.
+    fn icon(self, theme: IconTheme) -> Option<&'static str> {
+        (theme == IconTheme::Material).then_some(match self {
+            Drawer::Graph => "\u{eafe}",       // cod-git_merge
+            Drawer::Commits => "\u{eafc}",     // cod-git_commit
+            Drawer::FileHistory => "\u{ea82}", // cod-history
+            Drawer::Branches => branch_icon(theme),
+            Drawer::Worktrees => "\u{ebdf}", // cod-folder_library
+            Drawer::Remotes => "\u{ebaa}",   // cod-cloud
+            Drawer::Stashes => "\u{ea98}",   // cod-archive
+            Drawer::Tags => "\u{ea66}",      // cod-tag
+        })
     }
 }
 
@@ -403,11 +431,24 @@ enum ChangesHeaderAction {
 }
 
 impl ChangesHeaderAction {
+    /// `↶`/`⇩` are missing from JetBrains Mono; the material theme draws
+    /// VS Code's own codicons instead.
+    fn glyph(self, theme: IconTheme) -> &'static str {
+        match (theme, self) {
+            (IconTheme::Material, Self::Discard) => "\u{eae2}", // cod-discard
+            (IconTheme::Material, Self::Stash) => "\u{ea98}",   // cod-archive
+            (IconTheme::Material, Self::Stage) => "\u{ea60}",   // cod-add
+            (IconTheme::Emoji, Self::Discard) => "↶",
+            (IconTheme::Emoji, Self::Stash) => "⇩",
+            (IconTheme::Emoji, Self::Stage) => "+",
+        }
+    }
+
     fn footer_hint(self) -> &'static str {
         match self {
-            Self::Discard => "↶ Discard All Changes",
-            Self::Stash => "⇩ Stash Changes",
-            Self::Stage => "+ Stage All Changes",
+            Self::Discard => "Discard All Changes",
+            Self::Stash => "Stash Changes",
+            Self::Stage => "Stage All Changes",
         }
     }
 }
@@ -421,21 +462,25 @@ enum FileHoverAction {
 }
 
 impl FileHoverAction {
-    fn glyph(self) -> &'static str {
-        match self {
-            Self::Open => "↗",
-            Self::Discard => "↶",
-            Self::Stage => "+",
-            Self::Unstage => "−",
+    fn glyph(self, theme: IconTheme) -> &'static str {
+        match (theme, self) {
+            (IconTheme::Material, Self::Open) => "\u{ea94}", // cod-go_to_file
+            (IconTheme::Material, Self::Discard) => "\u{eae2}", // cod-discard
+            (IconTheme::Material, Self::Stage) => "\u{ea60}", // cod-add
+            (IconTheme::Material, Self::Unstage) => "\u{eb3b}", // cod-remove
+            (IconTheme::Emoji, Self::Open) => "↗",
+            (IconTheme::Emoji, Self::Discard) => "↶",
+            (IconTheme::Emoji, Self::Stage) => "+",
+            (IconTheme::Emoji, Self::Unstage) => "−",
         }
     }
 
     fn footer_hint(self) -> &'static str {
         match self {
-            Self::Open => "↗ Open Changes",
-            Self::Discard => "↶ Discard Changes",
-            Self::Stage => "+ Stage Changes",
-            Self::Unstage => "− Unstage Changes",
+            Self::Open => "Open Changes",
+            Self::Discard => "Discard Changes",
+            Self::Stage => "Stage Changes",
+            Self::Unstage => "Unstage Changes",
         }
     }
 }
@@ -540,11 +585,10 @@ struct ClickZones {
     message: Rect,
     sparkle: Rect,
     button: Rect,
-    /// The Sync Changes row (zero-sized when hidden).
+    /// The Sync chip beside Commit (zero-sized when hidden).
     sync: Rect,
     /// Branch text in the Source Control header.
     header_branch: Rect,
-    git_footer: FooterZones,
 }
 
 /// Handle for identity/label control of our own pane over the socket API.
@@ -1493,12 +1537,8 @@ impl App {
             self.sync_changes();
             return None;
         }
-        if hits(z.header_branch, x, y) || hits(z.git_footer.branch, x, y) {
+        if hits(z.header_branch, x, y) {
             self.open_branch_picker();
-            return None;
-        }
-        if hits(z.git_footer.sync, x, y) {
-            self.sync_changes();
             return None;
         }
         if let Some((index, line)) = self.row_hit(y) {
@@ -3185,8 +3225,9 @@ impl App {
 
     /// Content rows the single-repo message box shows at `width`.
     fn single_message_rows(&self, width: u16) -> usize {
+        // Border + one cell of padding each side, then the ✧ button.
         let sparkle_w = Span::raw(sparkle_icon(self.theme)).width() + 1;
-        let field = usize::from(width).saturating_sub(2 + sparkle_w).max(1);
+        let field = usize::from(width).saturating_sub(4 + sparkle_w).max(1);
         match self.active_repo() {
             Some(r) => wrap_message(&r.message, r.cursor, field)
                 .0
@@ -3260,8 +3301,8 @@ impl App {
 
         // With several repos, VS Code puts a message box + Commit button
         // INSIDE each repo's section (rendered as list rows); the single-repo
-        // view keeps them fixed at the top. The Sync Changes row only appears
-        // when there is something to sync (or a sync is running).
+        // view keeps them fixed at the top, with Sync as a compact chip on
+        // the Commit button's row.
         let multi = self.multi();
         let message_height = if multi {
             0
@@ -3269,14 +3310,6 @@ impl App {
             2 + self.single_message_rows(area.width) as u16
         };
         let button_height = if multi { 0 } else { 3 };
-        let sync_height = u16::from(
-            !multi
-                && self.sync_label().is_some()
-                && !self
-                    .active_repo()
-                    .is_some_and(|repo| sync_is_primary(&repo.status)),
-        );
-        let git_footer = self.sidebar_state.show_git_footer && self.active_repo().is_some();
         // A breathing row above and below the icons keeps the activity bar
         // from crowding the pane border.
         let activity_height = if self.merged() { 3 } else { 0 };
@@ -3286,31 +3319,25 @@ impl App {
                 Constraint::Length(1),
                 Constraint::Length(message_height),
                 Constraint::Length(button_height),
-                Constraint::Length(sync_height),
                 Constraint::Min(0),
                 Constraint::Length(footer_height),
             ])
             .areas(area)
         };
 
+        // No git footer strip here: the header already shows the branch
+        // (click → branch picker) and the Sync chip sits beside Commit.
         let mut footer_lines = self.footer_lines(area.width);
-        let mut menu_hint = git_footer && footer_lines.is_empty();
-        let mut sections = layout(
-            (footer_lines.len() as u16 + 2 * u16::from(menu_hint) + u16::from(git_footer)).max(1),
-        );
-        self.prepare_list(sections[5]);
-        let mut action_hint = self.hovered_action_hint();
+        let mut sections = layout((footer_lines.len() as u16).max(1));
+        self.prepare_list(sections[4]);
+        let action_hint = self.hovered_action_hint();
         if action_hint.is_some() && self.overlay.is_none() && self.flash.is_none() {
             footer_lines.clear();
+            sections = layout(1);
+            self.prepare_list(sections[4]);
         }
-        menu_hint = git_footer && footer_lines.is_empty();
-        sections = layout(
-            (footer_lines.len() as u16 + 2 * u16::from(menu_hint) + u16::from(git_footer)).max(1),
-        );
-        self.prepare_list(sections[5]);
-        action_hint = self.hovered_action_hint();
 
-        let [activity, header, message, button, sync, list, footer] = sections;
+        let [activity, header, message, button, list, footer] = sections;
         self.page = list.height.saturating_sub(1).max(1) as usize;
 
         if self.merged() {
@@ -3320,7 +3347,6 @@ impl App {
         if !multi {
             self.draw_message(frame, message);
             self.draw_button(frame, button);
-            self.draw_sync(frame, sync);
         } else {
             self.zones.message = Rect::default();
             self.zones.sparkle = Rect::default();
@@ -3329,17 +3355,7 @@ impl App {
         }
         self.draw_list(frame, list);
         let footer_empty = footer_lines.is_empty();
-        let content_height = footer.height.saturating_sub(u16::from(git_footer));
-        let footer_content = Rect::new(footer.x, footer.y, footer.width, content_height);
-        frame.render_widget(Paragraph::new(footer_lines), footer_content);
-        if menu_hint {
-            frame.render_widget(
-                Paragraph::new(action_hint.unwrap_or("m / ctrl+rclick for menus"))
-                    .style(Style::default().fg(Color::DarkGray))
-                    .alignment(Alignment::Right),
-                footer_content,
-            );
-        }
+        frame.render_widget(Paragraph::new(footer_lines), footer);
         // Collapse button at the bottom-right of the last footer line,
         // mirroring the explorer (and herdr's own sidebar).
         let last_line = Rect::new(
@@ -3350,23 +3366,9 @@ impl App {
         );
         let [footer_status, footer_button] =
             Layout::horizontal([Constraint::Min(0), Constraint::Length(3)]).areas(last_line);
-        self.zones.git_footer = FooterZones::default();
-        if git_footer {
-            if let Some(status) = self.active_repo().map(|repo| repo.status.clone()) {
-                self.zones.git_footer = draw_git_footer(
-                    frame,
-                    footer_status,
-                    self.theme,
-                    &status,
-                    self.syncing.is_some(),
-                    self.mouse_pos,
-                );
-            }
-        } else if footer_empty {
+        if footer_empty && let Some(hint) = action_hint {
             frame.render_widget(
-                Paragraph::new(action_hint.unwrap_or("m / ctrl+rclick for menus"))
-                    .style(Style::default().fg(Color::DarkGray))
-                    .alignment(Alignment::Right),
+                Paragraph::new(format!(" {hint}")).style(Style::default().fg(palette().muted)),
                 footer_status,
             );
         }
@@ -3402,21 +3404,15 @@ impl App {
         let outer_bottom = area.y + 2;
         let area = Rect::new(area.x, area.y + 1, area.width, 1);
         let (exp_icon, search_icon, git_icon) = activity_icons(self.theme);
-        // Both FA glyphs (folder, code-fork) render two cells wide in the
-        // non-Mono Nerd Font; reserve the second cell in each chip so the
-        // highlights are equal-sized with centered icons.
-        let slack = if self.theme == IconTheme::Material {
-            " "
-        } else {
-            ""
-        };
         let mut spans = [
             Span::raw(" "),
-            Span::raw(format!(" {exp_icon}{slack} ")),
+            // Symmetric chips: Nerd Font Mono draws icons one cell wide, so
+            // the old trailing "slack" cell pushed each icon off-center.
+            Span::raw(format!(" {exp_icon} ")),
             Span::raw(" "),
-            Span::raw(format!(" {search_icon}{slack} ")),
+            Span::raw(format!(" {search_icon} ")),
             Span::raw(" "),
-            Span::raw(format!(" {git_icon}{slack} ")),
+            Span::raw(format!(" {git_icon} ")),
         ];
         // Hit zones from the actual span widths (emoji vs nerd-glyph widths differ).
         let mut x = area.x;
@@ -3462,7 +3458,7 @@ impl App {
         }
         let gear_text = format!(" {} ", gear_icon(self.theme));
         let gear_w = Span::raw(gear_text.as_str()).width() as u16;
-        let gear_x = area.x + area.width.saturating_sub(gear_w);
+        let gear_x = area.x + area.width.saturating_sub(gear_w + 1);
         self.zones.gear = Rect::new(gear_x, outer_top, gear_w, 3);
         let gear_hovered = self
             .mouse_pos
@@ -3479,7 +3475,7 @@ impl App {
         }
 
         let pad = usize::from(area.width)
-            .saturating_sub(spans.iter().map(Span::width).sum::<usize>() + usize::from(gear_w));
+            .saturating_sub(spans.iter().map(Span::width).sum::<usize>() + usize::from(gear_w) + 1);
         let mut line = spans.to_vec();
         line.push(Span::raw(" ".repeat(pad)));
         line.push(gear);
@@ -3494,21 +3490,38 @@ impl App {
             Some(repo) if self.repos.len() == 1 => repo.name.clone(),
             _ => "Source Control".to_string(),
         };
-        let left = Span::styled(format!(" ▾ {title}"), Style::default().bold());
+        let left = [
+            Span::styled(
+                format!(" {} ", repo_icon(self.theme)),
+                Style::default().fg(palette().header_accent),
+            ),
+            Span::styled(title, Style::default().bold()),
+        ];
+        let left_w: usize = left.iter().map(Span::width).sum();
         // With several repos visible, the header names the one the commit box
         // and sync act on; a single repo shows branch + ahead/behind arrows.
         let right_text = match self.active_repo() {
             Some(repo) if self.repos.len() > 1 => {
-                format!("{} · {} ", repo.name, repo.status.branch)
+                format!(
+                    "{} · {} {} ",
+                    repo.name,
+                    branch_icon(self.theme),
+                    repo.status.branch
+                )
             }
             Some(repo) => {
-                let s = &repo.status;
-                let counts = if s.ahead + s.behind > 0 {
-                    format!(" {}↑ {}↓", s.ahead, s.behind)
+                let counts = ahead_behind(&repo.status);
+                let counts = if counts.is_empty() {
+                    counts
                 } else {
-                    String::new()
+                    format!("  {counts}")
                 };
-                format!("{}{} ", s.branch, counts)
+                format!(
+                    "{} {}{} ",
+                    branch_icon(self.theme),
+                    repo.status.branch,
+                    counts
+                )
             }
             None => String::new(),
         };
@@ -3519,7 +3532,7 @@ impl App {
         } else {
             Some(Span::styled(
                 format!("{} ", gear_icon(self.theme)),
-                Style::default().dim(),
+                Style::default().fg(palette().muted),
             ))
         };
         let gear_w = gear.as_ref().map(Span::width).unwrap_or(0);
@@ -3538,14 +3551,14 @@ impl App {
         };
         // The branch text yields to the buttons and gear in narrow panes.
         let avail = (area.width as usize)
-            .saturating_sub(left.width() + actions_w + gear_w)
+            .saturating_sub(left_w + actions_w + gear_w)
             .saturating_sub(1);
         let branch_text = truncate_to(right_text, avail);
         let branch_width = Span::raw(branch_text.as_str()).width();
         let pad = (area.width as usize)
-            .saturating_sub(left.width() + branch_width + actions_w + gear_w)
+            .saturating_sub(left_w + branch_width + actions_w + gear_w)
             .max(1);
-        let branch_x = area.x + left.width() as u16 + pad as u16;
+        let branch_x = area.x + left_w as u16 + pad as u16;
         self.zones.header_branch = Rect::new(branch_x, area.y, branch_width as u16, 1);
         let branch_hovered = self
             .mouse_pos
@@ -3555,10 +3568,11 @@ impl App {
             if branch_hovered {
                 hover_style()
             } else {
-                Style::default().dim()
+                Style::default().fg(palette().muted)
             },
         );
-        let mut spans = vec![left, Span::raw(" ".repeat(pad)), branch];
+        let mut spans = left.to_vec();
+        spans.extend([Span::raw(" ".repeat(pad)), branch]);
         spans.extend(action_spans);
         if let Some(gear) = gear {
             let gx = area.x + area.width.saturating_sub(gear_w as u16);
@@ -3573,9 +3587,12 @@ impl App {
         let border = if focused {
             Style::default().fg(palette().accent)
         } else {
-            Style::default().dim()
+            Style::default().fg(palette().border)
         };
-        let boxed = Block::bordered().border_style(border);
+        let boxed = Block::bordered()
+            .border_type(BorderType::Rounded)
+            .border_style(border)
+            .padding(Padding::horizontal(1));
         let inner = boxed.inner(area);
         frame.render_widget(boxed, area);
         self.zones.message = area;
@@ -3593,7 +3610,10 @@ impl App {
         let sparkle_w = Span::raw(sparkle_icon(self.theme)).width() as u16 + 1;
         let [text_area, sparkle_area] =
             Layout::horizontal([Constraint::Min(0), Constraint::Length(sparkle_w)]).areas(inner);
-        frame.render_widget(Paragraph::new(sparkle_glyph), sparkle_area);
+        frame.render_widget(
+            Paragraph::new(sparkle_glyph).alignment(Alignment::Right),
+            sparkle_area,
+        );
         self.zones.sparkle = sparkle_area;
 
         let (message, cursor, branch) = match self.active_repo() {
@@ -3602,7 +3622,10 @@ impl App {
         };
         if message.is_empty() && !focused {
             let placeholder = message_placeholder(&branch, usize::from(text_area.width));
-            frame.render_widget(Paragraph::new(placeholder).dim().italic(), text_area);
+            frame.render_widget(
+                Paragraph::new(placeholder).fg(palette().muted).italic(),
+                text_area,
+            );
             return;
         }
 
@@ -3626,6 +3649,9 @@ impl App {
         }
     }
 
+    /// The ✓ Commit button (or Sync Changes when that is the only thing left
+    /// to do), with a compact Sync chip on the same row when there is ALSO
+    /// something to push/pull — one row instead of two stacked buttons.
     fn draw_button(&mut self, frame: &mut Frame, area: Rect) {
         let focused = self.focus == Focus::Commit;
         let bg = if focused {
@@ -3638,69 +3664,78 @@ impl App {
             style = style.add_modifier(Modifier::BOLD);
         }
         // A breathing row above and below, like the inline variant.
-        let inner = if area.height >= 3 {
-            Rect::new(
-                area.x.saturating_add(1),
-                area.y + 1,
-                area.width.saturating_sub(2),
-                1,
-            )
+        let (row, caps) = if area.height >= 3 {
+            (area.y + 1, true)
         } else {
-            area
+            (area.y, false)
         };
+        let x0 = area.x.saturating_add(1);
+        let total = area.width.saturating_sub(2);
+        let chip = self
+            .sync_chip()
+            .map(|label| (Span::raw(label.as_str()).width() as u16 + 4, label))
+            .filter(|(w, _)| total >= w + 12);
+        let button_w = chip.as_ref().map_or(total, |(w, _)| total - w - 1);
         let label = if self
             .active_repo()
             .is_some_and(|repo| sync_is_primary(&repo.status))
         {
             self.sync_label()
-                .unwrap_or_else(|| "⟳ Sync Changes".to_string())
+                .unwrap_or_else(|| format!("{} Sync Changes", sync_icon(self.theme)))
         } else {
             "✓ Commit".to_string()
         };
-        draw_activity_caps(
-            frame,
-            (inner.x, inner.x + inner.width),
-            area.y,
-            area.y + area.height.saturating_sub(1),
-            bg,
-        );
-        frame.render_widget(Paragraph::new(label).centered().style(style), inner);
-        self.zones.button = Rect::new(inner.x, area.y, inner.width, area.height);
+        let pill = |frame: &mut Frame, x: u16, w: u16, bg: Color, label: String, style: Style| {
+            if caps {
+                draw_activity_caps(frame, (x, x + w), area.y, area.y + 2, bg);
+            }
+            frame.render_widget(
+                Paragraph::new(label).centered().style(style),
+                Rect::new(x, row, w, 1),
+            );
+        };
+        pill(frame, x0, button_w, bg, label, style);
+        self.zones.button = Rect::new(x0, area.y, button_w, area.height);
+        self.zones.sync = Rect::default();
+        if let Some((w, label)) = chip {
+            let x = x0 + button_w + 1;
+            let (bg, fg) = if self.syncing.is_some() {
+                (palette().sync_busy_bg, palette().muted_button_fg)
+            } else {
+                (palette().sync_bg, palette().sync_fg)
+            };
+            pill(frame, x, w, bg, label, Style::default().bg(bg).fg(fg));
+            self.zones.sync = Rect::new(x, area.y, w, area.height);
+        }
     }
 
-    /// The Sync Changes label, or `None` while there is nothing to sync
-    /// (which hides the row entirely).
+    /// The Sync Changes label, or `None` while there is nothing to sync.
     fn sync_label(&self) -> Option<String> {
         let status = &self.active_repo()?.status;
         let syncing = self
             .syncing
             .as_ref()
             .is_some_and(|(repo, _)| *repo == self.active);
-        sync_label_for_status(status, syncing)
+        sync_label_for_status(status, syncing, self.theme)
     }
 
-    /// A secondary button below Commit, VS Code's Sync Changes: pull + push
-    /// with the outgoing↑ / incoming↓ counts.
-    fn draw_sync(&mut self, frame: &mut Frame, area: Rect) {
-        let Some(label) = self.sync_label() else {
-            self.zones.sync = Rect::default();
-            return;
-        };
-        let style = if self.syncing.is_some() {
-            Style::default()
-                .bg(palette().sync_busy_bg)
-                .fg(palette().muted_button_fg)
-        } else {
-            Style::default().bg(palette().sync_bg).fg(palette().sync_fg)
-        };
-        let inner = Rect::new(
-            area.x.saturating_add(1),
-            area.y,
-            area.width.saturating_sub(2),
-            area.height,
-        );
-        self.zones.sync = inner;
-        frame.render_widget(Paragraph::new(label).centered().style(style), inner);
+    /// The compact Sync chip beside Commit (`⟳ ↑1 ↓2`): only while Commit is
+    /// the primary action AND there is something to push/pull.
+    fn sync_chip(&self) -> Option<String> {
+        let repo = self.active_repo()?;
+        if sync_is_primary(&repo.status) {
+            return None;
+        }
+        if self
+            .syncing
+            .as_ref()
+            .is_some_and(|(r, _)| *r == self.active)
+        {
+            return Some(sync_glyph(self.theme, true).to_string());
+        }
+        let counts = ahead_behind(&repo.status);
+        (repo.status.has_upstream && !counts.is_empty())
+            .then(|| format!("{} {counts}", sync_icon(self.theme)))
     }
 
     fn draw_list(&mut self, frame: &mut Frame, area: Rect) {
@@ -3746,6 +3781,7 @@ impl App {
                         r == active,
                         r == active && self.focus == Focus::Commit,
                         width,
+                        theme,
                     ),
                     Row::StagedHeader(r) => section_item(
                         "Staged Changes",
@@ -3769,23 +3805,16 @@ impl App {
                             width,
                             row_hovered,
                             hovered_action,
+                            theme,
                         )
                     }
                     Row::DrawerHeader(kind) => {
-                        let mut item = section_item(
-                            kind.title(),
-                            !self.drawers[kind.index()].expanded,
-                            None,
-                            width,
-                            None,
-                        );
-                        if kind == Drawer::FileHistory
-                            && let Some(target) = &self.history_target
-                        {
-                            let name = target.rsplit('/').next().unwrap_or(target);
-                            item = file_history_header(!self.drawers[kind.index()].expanded, name);
-                        }
-                        item
+                        let file = self
+                            .history_target
+                            .as_deref()
+                            .filter(|_| kind == Drawer::FileHistory)
+                            .map(|t| t.rsplit('/').next().unwrap_or(t));
+                        drawer_header_item(kind, !self.drawers[kind.index()].expanded, theme, file)
                     }
                     Row::DrawerLine(kind, i) => {
                         drawer_line(kind, &self.drawers[kind.index()].lines[i])
@@ -3857,7 +3886,7 @@ impl App {
                 let (top, _) = message_window(rows.len(), cursor_row, true);
                 let cy = y + 1 + (cursor_row - top) as u16;
                 if cy + 1 < area.y + area.height {
-                    frame.set_cursor_position(Position::new(area.x + 1 + cursor_col as u16, cy));
+                    frame.set_cursor_position(Position::new(area.x + 2 + cursor_col as u16, cy));
                 }
             }
         }
@@ -4067,20 +4096,13 @@ fn repo_header_item(
     branch_hovered: bool,
 ) -> ListItem<'static> {
     let arrow = if repo.collapsed { "▸" } else { "▾" };
-    let repo_icon = icon(theme, "", true, false);
     let name_style = if active {
         Style::default().bold()
     } else {
-        Style::default().dim().bold()
+        Style::default().fg(palette().muted).bold()
     };
-    let s = &repo.status;
-    let counts = if s.ahead + s.behind > 0 {
-        format!(" {}↑ {}↓", s.ahead, s.behind)
-    } else {
-        String::new()
-    };
-    let branch_text = format!("{} {}{}", branch_icon(theme), repo.branch_decor(), counts);
-    let full_icons_width = Span::raw(REPO_HEADER_ACTIONS).width();
+    let branch_text = repo_header_branch_text(repo, theme);
+    let full_icons_width = usize::from(REPO_HEADER_ACTIONS_WIDTH);
     let icons_width = if width >= full_icons_width {
         full_icons_width
     } else {
@@ -4092,7 +4114,7 @@ fn repo_header_item(
         .min(content_width / 2);
     let left_width = content_width.saturating_sub(branch_width);
     let left = truncate_to(
-        format!(" {arrow} {} {}", repo_icon.glyph, repo.name),
+        format!(" {arrow} {} {}", repo_icon(theme), repo.name),
         left_width,
     );
     let branch = truncate_to(branch_text, branch_width);
@@ -4106,43 +4128,43 @@ fn repo_header_item(
             if branch_hovered {
                 hover_style()
             } else {
-                Style::default().dim()
+                Style::default().fg(palette().muted)
             },
         ),
         Span::styled(
-            truncate_to(REPO_HEADER_ACTIONS.to_string(), icons_width),
-            Style::default().dim(),
+            truncate_to(repo_header_actions(theme), icons_width),
+            Style::default().fg(palette().muted),
         ),
     ]))
 }
 
-fn repo_header_branch_zone(repo: &Repo, theme: IconTheme, width: u16) -> (u16, u16) {
-    let counts = if repo.status.ahead + repo.status.behind > 0 {
-        format!(" {}↑ {}↓", repo.status.ahead, repo.status.behind)
+fn repo_header_branch_text(repo: &Repo, theme: IconTheme) -> String {
+    let counts = ahead_behind(&repo.status);
+    let counts = if counts.is_empty() {
+        counts
     } else {
-        String::new()
+        format!(" {counts}")
     };
-    let full_icons_width = Span::raw(REPO_HEADER_ACTIONS).width();
+    format!("{} {}{}", branch_icon(theme), repo.branch_decor(), counts)
+}
+
+fn repo_header_branch_zone(repo: &Repo, theme: IconTheme, width: u16) -> (u16, u16) {
+    let full_icons_width = usize::from(REPO_HEADER_ACTIONS_WIDTH);
     let icons_width = if usize::from(width) >= full_icons_width {
         full_icons_width
     } else {
         0
     };
     let content_width = usize::from(width).saturating_sub(icons_width);
-    let branch_width = Span::raw(format!(
-        "{} {}{}",
-        branch_icon(theme),
-        repo.branch_decor(),
-        counts
-    ))
-    .width()
-    .min(content_width / 2);
+    let branch_width = Span::raw(repo_header_branch_text(repo, theme))
+        .width()
+        .min(content_width / 2);
     let start = content_width.saturating_sub(branch_width) as u16;
     (start, start + branch_width as u16)
 }
 
 fn repo_header_action_zones(width: u16) -> ((u16, u16), (u16, u16)) {
-    let actions_width = Span::raw(REPO_HEADER_ACTIONS).width() as u16;
+    let actions_width = REPO_HEADER_ACTIONS_WIDTH;
     if width < actions_width {
         return ((0, 0), (0, 0));
     }
@@ -4211,9 +4233,9 @@ fn file_hover_action_at(x: u16, width: u16, staged: bool) -> Option<FileHoverAct
 }
 
 /// Columns the inline message box's input field spans (between the left
-/// border and the ✧ button).
+/// border + one padding cell and the ✧ button).
 fn inline_field_width(pane_width: u16) -> u16 {
-    pane_width.saturating_sub(2 + 3)
+    pane_width.saturating_sub(2 + 1 + 3)
 }
 
 /// Width-aware commit placeholder: drop detail rather than clipping
@@ -4272,7 +4294,7 @@ fn message_box_item(
     let border = if focused {
         Style::default().fg(palette().accent)
     } else {
-        Style::default().dim()
+        Style::default().fg(palette().border)
     };
     let horizontal = "─".repeat(width.saturating_sub(2));
     let field = usize::from(inline_field_width(width as u16));
@@ -4284,13 +4306,13 @@ fn message_box_item(
         " ".repeat(3usize.saturating_sub(Span::raw(suggest).width()))
     );
 
-    let mut lines = vec![Line::from(Span::styled(format!("┌{horizontal}┐"), border))];
+    let mut lines = vec![Line::from(Span::styled(format!("╭{horizontal}╮"), border))];
     if repo.message.is_empty() && !focused {
         let placeholder = message_placeholder(&repo.status.branch, field);
         let pad = field.saturating_sub(Span::raw(placeholder.as_str()).width());
         lines.push(Line::from(vec![
-            Span::styled("│", border),
-            Span::styled(placeholder, Style::default().dim().italic()),
+            Span::styled("│ ", border),
+            Span::styled(placeholder, Style::default().fg(palette().muted).italic()),
             Span::raw(" ".repeat(pad)),
             Span::raw(suggest_tail.clone()),
             Span::styled("│", border),
@@ -4307,7 +4329,7 @@ fn message_box_item(
                 Span::raw("   ".to_string())
             };
             lines.push(Line::from(vec![
-                Span::styled("│", border),
+                Span::styled("│ ", border),
                 Span::raw(row.clone()),
                 Span::raw(" ".repeat(pad)),
                 tail,
@@ -4315,7 +4337,7 @@ fn message_box_item(
             ]));
         }
     }
-    lines.push(Line::from(Span::styled(format!("└{horizontal}┘"), border)));
+    lines.push(Line::from(Span::styled(format!("╰{horizontal}╯"), border)));
     ListItem::new(lines)
 }
 
@@ -4326,6 +4348,7 @@ fn commit_button_item(
     active: bool,
     focused: bool,
     width: usize,
+    theme: IconTheme,
 ) -> ListItem<'static> {
     let (bg, fg) = match (active, focused) {
         (true, true) => (palette().button_focus_bg, palette().button_fg),
@@ -4333,7 +4356,8 @@ fn commit_button_item(
         (false, _) => (palette().muted_button_bg, palette().muted_button_fg),
     };
     let label = if sync_is_primary(status) {
-        sync_label_for_status(status, syncing).unwrap_or_else(|| "⟳ Sync Changes".to_string())
+        sync_label_for_status(status, syncing, theme)
+            .unwrap_or_else(|| format!("{} Sync Changes", sync_icon(theme)))
     } else {
         "✓ Commit".to_string()
     };
@@ -4379,24 +4403,18 @@ fn section_item(
     width: usize,
     action: Option<char>,
 ) -> ListItem<'static> {
-    let arrow = if collapsed { "▸" } else { "▾" };
-    let left = Span::styled(format!(" {arrow} {title}"), Style::default().bold());
+    let left = section_title(title, collapsed);
     let Some(count) = count else {
-        return ListItem::new(Line::from(left));
+        return ListItem::new(Line::from(left.to_vec()));
     };
-    let badge = Span::styled(
-        format!(" {count} "),
-        Style::default()
-            .bg(palette().button_bg)
-            .fg(palette().button_fg),
-    );
+    let left_w: usize = left.iter().map(Span::width).sum();
+    let badge = count_badge(count);
     // Hovering shows the section-wide stage/unstage glyph before the badge.
     let action_span = action.map(|a| Span::styled(format!("{a} "), Style::default().bold()));
     let aw = action_span.as_ref().map(Span::width).unwrap_or(0);
-    let pad = width
-        .saturating_sub(left.width() + badge.width() + 1 + aw)
-        .max(1);
-    let mut spans = vec![left, Span::raw(" ".repeat(pad))];
+    let pad = width.saturating_sub(left_w + badge.width() + 1 + aw).max(1);
+    let mut spans = left.to_vec();
+    spans.push(Span::raw(" ".repeat(pad)));
     if let Some(a) = action_span {
         spans.push(a);
     }
@@ -4405,12 +4423,31 @@ fn section_item(
     ListItem::new(Line::from(spans))
 }
 
+/// ` ▾ Title`: a muted disclosure arrow, bold title.
+fn section_title(title: &str, collapsed: bool) -> [Span<'static>; 2] {
+    let arrow = if collapsed { "▸" } else { "▾" };
+    [
+        Span::styled(format!(" {arrow} "), Style::default().fg(palette().muted)),
+        Span::styled(title.to_string(), Style::default().bold()),
+    ]
+}
+
+fn count_badge(count: usize) -> Span<'static> {
+    Span::styled(
+        format!(" {count} "),
+        Style::default()
+            .bg(palette().button_bg)
+            .fg(palette().button_fg),
+    )
+}
+
 fn changes_header_item(
     collapsed: bool,
     count: usize,
     width: usize,
     hovered: bool,
     hovered_action: Option<ChangesHeaderAction>,
+    theme: IconTheme,
 ) -> ListItem<'static> {
     let Some(actions) = hovered
         .then(|| changes_header_action_zones(width as u16, count))
@@ -4418,27 +4455,18 @@ fn changes_header_item(
     else {
         return section_item("Changes", collapsed, Some(count), width, None);
     };
-    let arrow = if collapsed { "▸" } else { "▾" };
-    let left = Span::styled(format!(" {arrow} Changes"), Style::default().bold());
-    let badge = Span::styled(
-        format!(" {count} "),
-        Style::default()
-            .bg(palette().button_bg)
-            .fg(palette().button_fg),
-    );
+    let left = section_title("Changes", collapsed);
+    let left_w: usize = left.iter().map(Span::width).sum();
+    let badge = count_badge(count);
     let actions_width = usize::from(actions[2].1.1 - actions[0].1.0);
     let pad = width
-        .saturating_sub(left.width() + actions_width + badge.width() + 1)
+        .saturating_sub(left_w + actions_width + badge.width() + 1)
         .max(1);
-    let mut spans = vec![left, Span::raw(" ".repeat(pad))];
+    let mut spans = left.to_vec();
+    spans.push(Span::raw(" ".repeat(pad)));
     for (action, _) in actions {
-        let glyph = match action {
-            ChangesHeaderAction::Discard => "↶",
-            ChangesHeaderAction::Stash => "⇩",
-            ChangesHeaderAction::Stage => "+",
-        };
         spans.push(Span::styled(
-            format!(" {glyph} "),
+            format!(" {} ", action.glyph(theme)),
             chrome_button_style(hovered_action == Some(action)),
         ));
     }
@@ -4447,13 +4475,33 @@ fn changes_header_item(
     ListItem::new(Line::from(spans))
 }
 
-/// The FILE HISTORY header with the followed file's name appended, dimmed.
-fn file_history_header(collapsed: bool, file: &str) -> ListItem<'static> {
+/// A Git-Graph drawer header: secondary to Staged/Changes, so it is muted
+/// and not bold, with a codicon to tell the eight apart at a glance. FILE
+/// HISTORY appends the followed file's name.
+fn drawer_header_item(
+    kind: Drawer,
+    collapsed: bool,
+    theme: IconTheme,
+    file: Option<&str>,
+) -> ListItem<'static> {
     let arrow = if collapsed { "▸" } else { "▾" };
-    ListItem::new(Line::from(vec![
-        Span::styled(format!(" {arrow} File History"), Style::default().bold()),
-        Span::styled(format!("  {file}"), Style::default().dim()),
-    ]))
+    let muted = Style::default().fg(palette().muted);
+    let mut spans = vec![Span::styled(format!(" {arrow} "), muted)];
+    if let Some(glyph) = kind.icon(theme) {
+        spans.push(Span::styled(format!("{glyph} "), muted));
+    }
+    spans.push(Span::styled(
+        kind.title(),
+        if collapsed {
+            muted
+        } else {
+            Style::default().bold()
+        },
+    ));
+    if let Some(file) = file {
+        spans.push(Span::styled(format!("  {file}"), muted));
+    }
+    ListItem::new(Line::from(spans))
 }
 
 /// One content line inside an expanded drawer. Branch lines highlight the
@@ -4482,6 +4530,8 @@ fn file_item(
         Some((dir, name)) => (Some(dir), name),
         None => (None, entry.path.as_str()),
     };
+    // Only the icon and the status letter carry color: a whole list of
+    // status-colored names read as noise. Deleted files are struck through.
     let color = status_color(entry.letter);
     let file_icon = icon(theme, name, false, false);
     let icon_style = ui_icon_style(file_icon.rgb);
@@ -4496,14 +4546,19 @@ fn file_item(
     let prefix_width: usize = spans.iter().map(Span::width).sum();
     let content_width = width.saturating_sub(prefix_width + tail);
     let visible_name = truncate_to(name.to_string(), content_width);
-    spans.push(Span::styled(visible_name, Style::default().fg(color)));
+    let name_style = if entry.letter == 'D' {
+        Style::default().fg(palette().muted).crossed_out()
+    } else {
+        Style::default()
+    };
+    spans.push(Span::styled(visible_name, name_style));
     if let Some(dir) = dir {
         let sep = std::path::MAIN_SEPARATOR.to_string();
         let used: usize = spans.iter().map(Span::width).sum();
         let avail = width.saturating_sub(used + tail);
-        let text = truncate_to(format!(" {}", dir.replace('/', &sep)), avail);
+        let text = truncate_to(format!("  {}", dir.replace('/', &sep)), avail);
         if !text.is_empty() {
-            spans.push(Span::styled(text, Style::default().dim()));
+            spans.push(Span::styled(text, Style::default().fg(palette().muted)));
         }
     }
     let letter = Span::styled(entry.letter.to_string(), Style::default().fg(color).bold());
@@ -4513,7 +4568,7 @@ fn file_item(
     if show_actions {
         for action in actions {
             spans.push(Span::styled(
-                format!(" {} ", action.glyph()),
+                format!(" {} ", action.glyph(theme)),
                 chrome_button_style(hovered_action == Some(*action)),
             ));
         }
@@ -4575,9 +4630,23 @@ mod tests {
             ..Status::default()
         };
         assert_eq!(
-            sync_label_for_status(&status, false).as_deref(),
-            Some("⟳ Sync Changes 43↑")
+            sync_label_for_status(&status, false, IconTheme::Emoji).as_deref(),
+            Some("⟳ Sync Changes ↑43")
         );
+        assert_eq!(
+            sync_label_for_status(&status, false, IconTheme::Material).as_deref(),
+            Some("\u{ea77} Sync Changes ↑43")
+        );
+    }
+
+    #[test]
+    fn repo_header_actions_keep_their_fixed_width_in_every_theme() {
+        for theme in [IconTheme::Material, IconTheme::Emoji] {
+            assert_eq!(
+                Span::raw(repo_header_actions(theme)).width(),
+                usize::from(REPO_HEADER_ACTIONS_WIDTH)
+            );
+        }
     }
 
     #[test]
@@ -4616,13 +4685,31 @@ mod tests {
     fn changes_header_actions_describe_their_footer_tooltips() {
         assert_eq!(
             ChangesHeaderAction::Discard.footer_hint(),
-            "↶ Discard All Changes"
+            "Discard All Changes"
         );
-        assert_eq!(ChangesHeaderAction::Stash.footer_hint(), "⇩ Stash Changes");
+        assert_eq!(ChangesHeaderAction::Stash.footer_hint(), "Stash Changes");
         assert_eq!(
             ChangesHeaderAction::Stage.footer_hint(),
-            "+ Stage All Changes"
+            "Stage All Changes"
         );
+        // Every hover glyph is one cell, or the 3-cell hit zones drift.
+        for theme in [IconTheme::Material, IconTheme::Emoji] {
+            for action in [
+                ChangesHeaderAction::Discard,
+                ChangesHeaderAction::Stash,
+                ChangesHeaderAction::Stage,
+            ] {
+                assert_eq!(Span::raw(action.glyph(theme)).width(), 1);
+            }
+            for action in [
+                FileHoverAction::Open,
+                FileHoverAction::Discard,
+                FileHoverAction::Stage,
+                FileHoverAction::Unstage,
+            ] {
+                assert_eq!(Span::raw(action.glyph(theme)).width(), 1);
+            }
+        }
     }
 
     #[test]
@@ -4656,10 +4743,10 @@ mod tests {
 
     #[test]
     fn file_hover_actions_describe_their_footer_tooltips() {
-        assert_eq!(FileHoverAction::Open.footer_hint(), "↗ Open Changes");
-        assert_eq!(FileHoverAction::Discard.footer_hint(), "↶ Discard Changes");
-        assert_eq!(FileHoverAction::Stage.footer_hint(), "+ Stage Changes");
-        assert_eq!(FileHoverAction::Unstage.footer_hint(), "− Unstage Changes");
+        assert_eq!(FileHoverAction::Open.footer_hint(), "Open Changes");
+        assert_eq!(FileHoverAction::Discard.footer_hint(), "Discard Changes");
+        assert_eq!(FileHoverAction::Stage.footer_hint(), "Stage Changes");
+        assert_eq!(FileHoverAction::Unstage.footer_hint(), "Unstage Changes");
     }
 
     #[test]

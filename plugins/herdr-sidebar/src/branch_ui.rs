@@ -8,15 +8,18 @@ use ratatui::widgets::{Block, Clear, List, ListItem, Paragraph};
 use crate::git::{Branch, Git, Status};
 use crate::icons::IconTheme;
 use crate::ui::{
-    branch_icon, hits, hover_style, keep_visible_scroll, palette, selection_style, truncate_to,
+    branch_icon, hits, hover_style, keep_visible_scroll, palette, selection_style, sync_icon,
+    truncate_to,
 };
 
-const SYNC_FRAMES: [&str; 4] = ["◐", "◓", "◑", "◒"];
+// Braille spinner: JetBrains Mono has these, unlike ◐◓◑◒ which fell back to
+// another font mid-line.
+const SYNC_FRAMES: [&str; 8] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧"];
 const SYNC_FRAME_MILLIS: u128 = 120;
 
-pub fn sync_glyph(syncing: bool) -> &'static str {
+pub fn sync_glyph(theme: IconTheme, syncing: bool) -> &'static str {
     if !syncing {
-        return "⟳";
+        return sync_icon(theme);
     }
     let elapsed = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -202,7 +205,7 @@ pub fn draw_git_footer(
     mouse_pos: Option<(u16, u16)>,
 ) -> FooterZones {
     let branch_text = format!(" {} {} ", branch_icon(theme), status.branch);
-    let sync_icon = sync_glyph(syncing);
+    let sync_icon = sync_glyph(theme, syncing);
     let sync_text = if status.has_upstream {
         format!("{sync_icon} {}↓ {}↑", status.behind, status.ahead)
     } else {
@@ -220,7 +223,7 @@ pub fn draw_git_footer(
         if mouse_pos.is_some_and(|(x, y)| hits(rect, x, y)) {
             hover_style()
         } else {
-            Style::default().dim()
+            Style::default().fg(palette().muted)
         }
     };
     frame.render_widget(
@@ -251,7 +254,8 @@ mod tests {
 
     #[test]
     fn sync_glyph_restores_refresh_icon_when_idle() {
-        assert_eq!(sync_glyph(false), "⟳");
-        assert!(SYNC_FRAMES.contains(&sync_glyph(true)));
+        assert_eq!(sync_glyph(IconTheme::Emoji, false), "⟳");
+        assert_eq!(sync_glyph(IconTheme::Material, false), "\u{ea77}");
+        assert!(SYNC_FRAMES.contains(&sync_glyph(IconTheme::Material, true)));
     }
 }

@@ -65,6 +65,11 @@ pub struct Palette {
     /// Advisory text (the editor's "experimental" tag, the font installer's
     /// manual command) — `Yellow` is illegible on a light background.
     pub warning: Color,
+    /// Secondary text (paths, branch labels, drawer titles). Terminal DIM is
+    /// half intensity, which is too faint for small text on black.
+    pub muted: Color,
+    /// An unfocused input's frame (the commit message box).
+    pub border: Color,
 }
 
 // VS Code's dark-theme git decoration colors, shared by the Source Control
@@ -106,6 +111,8 @@ const VSCODE_PALETTE: Palette = Palette {
     diff_del_mark: Color::Rgb(0xd1, 0x6d, 0x76),
     diff_add_mark: Color::Rgb(0x8c, 0xc9, 0x8f),
     warning: Color::Yellow,
+    muted: Color::Rgb(0x9d, 0x9d, 0x9d),
+    border: Color::Rgb(0x45, 0x45, 0x45),
 };
 
 // The same vocabulary drawn for a LIGHT terminal background: VS Code Light+
@@ -151,37 +158,43 @@ const LIGHT_PALETTE: Palette = Palette {
     diff_del_mark: Color::Rgb(0xb3, 0x1d, 0x28),
     diff_add_mark: Color::Rgb(0x1a, 0x7f, 0x37),
     warning: Color::Rgb(0x9a, 0x67, 0x00),
+    muted: Color::Rgb(0x71, 0x71, 0x71),
+    border: Color::Rgb(0xce, 0xce, 0xce),
 };
 
+// schugazi fork: the "terminal" theme is drawn for the WezTerm profile this
+// fork runs in (black background, #c0c0c0 text, WezTerm's default ANSI set)
+// using herdr's own `[theme.custom]` colors, so the sidebar reads as part of
+// herdr instead of borrowing WezTerm's navy/olive ANSI slots.
 const TERMINAL_PALETTE: Palette = Palette {
-    keycap_bg: Color::DarkGray,
-    keycap_fg: Color::White,
-    modified: Color::Yellow,
-    untracked: Color::Green,
-    added: Color::LightGreen,
-    renamed: Color::Green,
-    deleted: Color::Red,
-    conflict: Color::LightRed,
-    ignored: Color::DarkGray,
-    selection_bg: Color::DarkGray,
-    selection_unfocused_bg: Color::Black,
-    activity_hover_bg: Color::Rgb(0x3c, 0x42, 0x5d),
-    hover_bg: Color::Black,
-    accent: Color::Blue,
-    accent_focus: Color::LightBlue,
-    button_bg: Color::Blue,
-    button_focus_bg: Color::LightBlue,
-    button_fg: Color::White,
-    muted_button_bg: Color::Black,
-    muted_button_fg: Color::Gray,
-    sync_bg: Color::DarkGray,
-    sync_busy_bg: Color::Black,
-    sync_fg: Color::White,
-    header_accent: Color::LightBlue,
-    selection_fg: Color::White,
-    selection_unfocused_fg: Color::White,
-    hover_fg: Color::Gray,
-    text_selection_bg: Color::DarkGray,
+    keycap_bg: Color::Rgb(0x22, 0x37, 0x2a),
+    keycap_fg: Color::Rgb(0xed, 0xf2, 0xed),
+    modified: Color::Rgb(0xff, 0xd7, 0x00),
+    untracked: Color::Rgb(0x83, 0xd8, 0xbd),
+    added: Color::Rgb(0x98, 0xdf, 0x78),
+    renamed: Color::Rgb(0x93, 0xbf, 0xf2),
+    deleted: Color::Rgb(0xff, 0x9e, 0x9e),
+    conflict: Color::Rgb(0xff, 0x7b, 0x7b),
+    ignored: Color::Rgb(0x5f, 0x5f, 0x5f),
+    selection_bg: Color::Rgb(0x30, 0x4b, 0x39),
+    selection_unfocused_bg: Color::Rgb(0x1a, 0x26, 0x1e),
+    activity_hover_bg: Color::Rgb(0x22, 0x37, 0x2a),
+    hover_bg: Color::Rgb(0x14, 0x1c, 0x17),
+    accent: Color::Rgb(0x5f, 0xff, 0x00),
+    accent_focus: Color::Rgb(0x5f, 0xff, 0x00),
+    button_bg: Color::Rgb(0x30, 0x4b, 0x39),
+    button_focus_bg: Color::Rgb(0x3e, 0x5b, 0x47),
+    button_fg: Color::Rgb(0xed, 0xf2, 0xed),
+    muted_button_bg: Color::Rgb(0x16, 0x1f, 0x19),
+    muted_button_fg: Color::Rgb(0x8a, 0x8a, 0x8a),
+    sync_bg: Color::Rgb(0x22, 0x37, 0x2a),
+    sync_busy_bg: Color::Rgb(0x16, 0x1f, 0x19),
+    sync_fg: Color::Rgb(0xed, 0xf2, 0xed),
+    header_accent: Color::Rgb(0x5f, 0xff, 0x00),
+    selection_fg: Color::Rgb(0xed, 0xf2, 0xed),
+    selection_unfocused_fg: Color::Reset,
+    hover_fg: Color::Reset,
+    text_selection_bg: Color::Rgb(0x30, 0x4b, 0x39),
     // Diff tints stay RGB in every dark theme: an ANSI background here would
     // collide with the syntax foregrounds the terminal profile also remaps.
     diff_del_bg: Color::Rgb(0x42, 0x22, 0x26),
@@ -190,7 +203,9 @@ const TERMINAL_PALETTE: Palette = Palette {
     diff_add_word_bg: Color::Rgb(0x35, 0x59, 0x3d),
     diff_del_mark: Color::Rgb(0xd1, 0x6d, 0x76),
     diff_add_mark: Color::Rgb(0x8c, 0xc9, 0x8f),
-    warning: Color::Yellow,
+    warning: Color::Rgb(0xff, 0xd7, 0x00),
+    muted: Color::Rgb(0x8a, 0x8a, 0x8a),
+    border: Color::Rgb(0x3e, 0x5b, 0x47),
 };
 
 /// 0 = vscode, 1 = terminal, 2 = light. The numbering is historical: this used
@@ -283,21 +298,23 @@ pub fn chrome_button_style(hovered: bool) -> Style {
             .bg(palette().keycap_bg)
             .fg(palette().keycap_fg)
     } else {
-        Style::default().dim()
+        Style::default().fg(palette().muted)
     }
 }
 
 /// Activity-bar buttons keep the stronger selected chip when active and use
-/// the same subtle keycap hover as the title-bar actions when inactive.
+/// the same subtle keycap hover as the title-bar actions when inactive. Idle
+/// icons are muted, not DIM: a half-intensity single-cell glyph all but
+/// disappears on a black background.
 pub fn activity_button_style(active: bool, hovered: bool) -> Style {
     if active {
-        selection_style(true)
+        selection_style(true).fg(palette().header_accent)
     } else if hovered {
         Style::default()
             .bg(palette().activity_hover_bg)
             .fg(palette().keycap_fg)
     } else {
-        Style::default().dim()
+        Style::default().fg(palette().muted)
     }
 }
 
@@ -335,12 +352,26 @@ fn icon_style_for(theme: ColorTheme, rgb: Option<(u8, u8, u8)>) -> Style {
             let (r, g, b) = if theme.is_light() {
                 darken_for_light(rgb)
             } else {
-                rgb
+                lift_for_dark(rgb)
             };
             Style::default().fg(Color::Rgb(r, g, b))
         }
         None => Style::default(),
     }
+}
+
+/// The dark-background mirror of [`darken_for_light`]: scale a too-dark icon
+/// color (ruby's #701516 is invisible at one cell on black) up to
+/// `MIN_DARK_LUMA`, preserving hue as far as the channels allow.
+fn lift_for_dark((r, g, b): (u8, u8, u8)) -> (u8, u8, u8) {
+    const MIN_DARK_LUMA: f32 = 0.34;
+    let luma = (0.2126 * f32::from(r) + 0.7152 * f32::from(g) + 0.0722 * f32::from(b)) / 255.0;
+    if luma >= MIN_DARK_LUMA || luma == 0.0 {
+        return (r, g, b);
+    }
+    let scale = MIN_DARK_LUMA / luma;
+    let lift = |c: u8| (f32::from(c) * scale).round().clamp(0.0, 255.0) as u8;
+    (lift(r), lift(g), lift(b))
 }
 
 /// Scale a color toward black until its relative luminance is at most
@@ -444,21 +475,30 @@ pub fn hits_collapse_button(column: u16, row: u16, pane_width: u16, pane_height:
     row == pane_height.saturating_sub(1) && column >= pane_width.saturating_sub(4)
 }
 
-/// Theme-matched activity-bar icons: (explorer, search, source control). FA
-/// glyphs render two cells wide in the non-Mono Nerd Font — chips reserve
-/// the second cell (see the activity-bar renderer).
+/// Theme-matched activity-bar icons: (explorer, search, source control) —
+/// VS Code's own codicons (cod-files, cod-search, cod-source_control).
 pub fn activity_icons(theme: IconTheme) -> (&'static str, &'static str, &'static str) {
     match theme {
-        IconTheme::Material => ("\u{f07b}", "\u{f002}", "\u{f126}"),
+        IconTheme::Material => ("\u{eaf0}", "\u{ea6d}", "\u{ea68}"),
         IconTheme::Emoji => ("📁", "🔍", "🔀"),
     }
 }
 
-/// Theme-matched ⚙ settings glyph.
+/// Theme-matched ⚙ settings glyph (cod-settings_gear).
 pub fn gear_icon(theme: IconTheme) -> &'static str {
     match theme {
-        IconTheme::Material => "\u{f013}",
+        IconTheme::Material => "\u{eb51}",
         IconTheme::Emoji => "⚙",
+    }
+}
+
+/// Sync / pull-push glyph. `⟳` and `⇅` are not in JetBrains Mono, so the
+/// terminal substitutes another font at another size and baseline; the
+/// material theme uses cod-sync from the Nerd Font instead.
+pub fn sync_icon(theme: IconTheme) -> &'static str {
+    match theme {
+        IconTheme::Material => "\u{ea77}",
+        IconTheme::Emoji => "⟳",
     }
 }
 
@@ -477,6 +517,14 @@ pub fn branch_icon(theme: IconTheme) -> &'static str {
     match theme {
         IconTheme::Material => "\u{e725}",
         IconTheme::Emoji => "⎇",
+    }
+}
+
+/// Theme-matched repository glyph (cod-repo) for Source Control titles.
+pub fn repo_icon(theme: IconTheme) -> &'static str {
+    match theme {
+        IconTheme::Material => "\u{ea62}",
+        IconTheme::Emoji => "📦",
     }
 }
 
@@ -725,6 +773,7 @@ mod tests {
             light.button_fg,
             light.sync_fg,
             light.warning,
+            light.muted,
             light.diff_del_mark,
             light.diff_add_mark,
         ] {
@@ -789,7 +838,8 @@ mod tests {
         assert!(!hovered.add_modifier.contains(Modifier::DIM));
 
         let idle = activity_button_style(false, false);
-        assert!(idle.add_modifier.contains(Modifier::DIM));
+        assert!(!idle.add_modifier.contains(Modifier::DIM));
+        assert_eq!(idle.fg, Some(palette().muted));
         assert!(idle.bg.is_none());
     }
 
@@ -813,6 +863,10 @@ mod tests {
         // A color that is already dark enough passes through untouched.
         let ruby = (0x70, 0x15, 0x16);
         assert_eq!(darken_for_light(ruby), ruby);
+        // … and on a dark theme that same ruby is lifted into view, hue kept.
+        let lifted = lift_for_dark(ruby);
+        assert!(luma(Color::Rgb(lifted.0, lifted.1, lifted.2)) >= 0.33);
+        assert!(lifted.0 > lifted.1 && lifted.0 > lifted.2);
         // `set_color_theme` is process-global and tests run in parallel —
         // drive the theme-taking form instead of mutating it here.
         assert_eq!(
@@ -827,35 +881,33 @@ mod tests {
     }
 
     #[test]
-    fn terminal_palette_uses_terminal_mapped_ansi_colors() {
+    fn terminal_palette_matches_the_herdr_wezterm_theme() {
         let terminal = palette_for(ColorTheme::Terminal);
         let vscode = palette_for(ColorTheme::VsCode);
-        assert_eq!(terminal.modified, Color::Yellow);
-        assert_eq!(terminal.untracked, Color::Green);
-        assert_eq!(terminal.accent, Color::Blue);
-        assert_eq!(terminal.selection_bg, Color::DarkGray);
+        // herdr's [theme.custom] accent / surfaces, not WezTerm's ANSI slots.
+        assert_eq!(terminal.accent, Color::Rgb(0x5f, 0xff, 0x00));
+        assert_eq!(terminal.selection_bg, Color::Rgb(0x30, 0x4b, 0x39));
         assert_eq!(vscode.modified, Color::Rgb(0xe2, 0xc0, 0x8d));
         assert_eq!(vscode.accent, Color::Rgb(0x00, 0x78, 0xd4));
-        assert_eq!(
-            selection_style_for(ColorTheme::Terminal, true).bg,
-            Some(Color::DarkGray)
-        );
-        assert_eq!(
-            selection_style_for(ColorTheme::Terminal, true).fg,
-            Some(Color::White)
-        );
-        assert!(
-            !selection_style_for(ColorTheme::Terminal, true)
-                .add_modifier
-                .contains(Modifier::REVERSED)
-        );
-        let hover = hover_style_for(ColorTheme::Terminal);
-        assert_eq!(hover.bg, Some(Color::Black));
-        assert_eq!(hover.fg, Some(Color::Gray));
-        assert_eq!(
-            selection_style_for(ColorTheme::Terminal, false).fg,
-            Some(Color::White)
-        );
+        // Every color is stated in RGB: WezTerm's default ANSI blue is navy.
+        let named = |c: Color| !matches!(c, Color::Rgb(..) | Color::Reset);
+        for c in [
+            terminal.modified,
+            terminal.untracked,
+            terminal.deleted,
+            terminal.button_bg,
+            terminal.header_accent,
+            terminal.muted,
+            terminal.keycap_bg,
+        ] {
+            assert!(!named(c), "{c:?} would inherit the terminal's ANSI slot");
+        }
+        let selected = selection_style_for(ColorTheme::Terminal, true);
+        assert_eq!(selected.fg, Some(Color::Rgb(0xed, 0xf2, 0xed)));
+        assert!(!selected.add_modifier.contains(Modifier::REVERSED));
+        // Dark text-selection / hover washes: the terminal fg shows through.
+        assert_eq!(hover_style_for(ColorTheme::Terminal).fg, None);
+        assert!(luma(terminal.hover_bg) < luma(terminal.selection_bg));
     }
 
     #[test]

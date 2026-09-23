@@ -4,7 +4,10 @@
 # to the historical source build instead of making installation less reliable.
 set -u
 
-repo="alexarthurs/herdr-sidebar"
+# Fork: never fetch upstream's prebuilt (it would silently replace the fork's
+# changes whenever the versions match). The fork publishes no releases, so
+# this always falls through to the source build.
+repo="schugazi/herdr-sidebar"
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 test_mode=${HS_TEST_MODE:-0}
 if [ "$test_mode" = 1 ]; then

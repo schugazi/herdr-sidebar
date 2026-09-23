@@ -3256,20 +3256,12 @@ impl App {
                 _ => Vec::new(),
             }
         };
+        // No permanent "m / ctrl+rclick" hint: it is in ⚙ Settings' key list
+        // and was the noisiest line in the pane.
         let git_footer = self.sidebar_state.show_git_footer && self.git_footer_status.is_some();
-        let menu_hint = git_footer && footer_lines.is_empty();
-        let footer_empty = footer_lines.is_empty();
         let content_height = footer.height.saturating_sub(u16::from(git_footer));
         let footer_content = Rect::new(footer.x, footer.y, footer.width, content_height);
         frame.render_widget(Paragraph::new(footer_lines), footer_content);
-        if menu_hint {
-            frame.render_widget(
-                Paragraph::new("m / ctrl+rclick for menus")
-                    .style(Style::default().fg(Color::DarkGray))
-                    .alignment(Alignment::Right),
-                footer_content,
-            );
-        }
         self.git_footer_zones = FooterZones::default();
         if git_footer {
             let status_area = Rect::new(
@@ -3288,17 +3280,6 @@ impl App {
                     self.mouse_pos,
                 );
             }
-        } else if footer_empty {
-            let hint_area = Rect::new(
-                last_line.x,
-                last_line.y,
-                last_line.width.saturating_sub(3),
-                1,
-            );
-            frame.render_widget(
-                Paragraph::new(" m / ctrl+rclick: menu".dim().italic()),
-                hint_area,
-            );
         }
 
         match self.overlay {
@@ -3417,7 +3398,7 @@ impl App {
         } else if self.show_hotkeys() {
             wrap_hints(&self.hints(), width, 3).len() as u16
         } else if git_footer {
-            2
+            1
         } else {
             0
         };
@@ -3454,21 +3435,15 @@ impl App {
         let area = Rect::new(area.x, area.y + 1, area.width, 1);
         let (exp_icon, search_icon, git_icon) = activity_icons(self.theme);
         let search_active = matches!(self.overlay, Some(Overlay::ContentSearch { .. }));
-        // Both FA glyphs (folder, code-fork) render two cells wide in the
-        // non-Mono Nerd Font; reserve the second cell in each chip so the
-        // highlights are equal-sized with centered icons.
-        let slack = if self.theme == IconTheme::Material {
-            " "
-        } else {
-            ""
-        };
         let mut spans = [
             Span::raw(" "),
-            Span::raw(format!(" {exp_icon}{slack} ")),
+            // Symmetric chips: Nerd Font Mono draws icons one cell wide, so
+            // the old trailing "slack" cell pushed each icon off-center.
+            Span::raw(format!(" {exp_icon} ")),
             Span::raw(" "),
-            Span::raw(format!(" {search_icon}{slack} ")),
+            Span::raw(format!(" {search_icon} ")),
             Span::raw(" "),
-            Span::raw(format!(" {git_icon}{slack} ")),
+            Span::raw(format!(" {git_icon} ")),
         ];
         // Hit zones from the actual span widths (emoji vs nerd-glyph widths differ).
         let mut x = area.x;
@@ -3519,7 +3494,7 @@ impl App {
         }
         let gear_text = format!(" {} ", gear_icon(self.theme));
         let gear_w = Span::raw(gear_text.as_str()).width() as u16;
-        let gear_x = area.x + area.width.saturating_sub(gear_w);
+        let gear_x = area.x + area.width.saturating_sub(gear_w + 1);
         self.gear = Rect::new(gear_x, outer_top, gear_w, 3);
         let gear_hovered = self.mouse_pos.is_some_and(|(x, y)| hits(self.gear, x, y));
         let gear = Span::styled(gear_text, activity_button_style(false, gear_hovered));
@@ -3534,7 +3509,7 @@ impl App {
         }
 
         let pad = usize::from(area.width)
-            .saturating_sub(spans.iter().map(Span::width).sum::<usize>() + usize::from(gear_w));
+            .saturating_sub(spans.iter().map(Span::width).sum::<usize>() + usize::from(gear_w) + 1);
         let mut line = spans.to_vec();
         line.push(Span::raw(" ".repeat(pad)));
         line.push(gear);

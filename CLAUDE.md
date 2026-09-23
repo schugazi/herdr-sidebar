@@ -257,12 +257,29 @@ plain-right-click passthrough is not supported). Same-tab `pane.move` is a delib
 (`SameTab`) — restructure within a tab by bouncing the pane through `--new-tab` and back
 (herdr auto-closes the emptied temp tab).
 
-Plugin panes cannot read herdr's private UI palette. The `terminal` color theme therefore uses
-ANSI named colors that inherit the terminal profile; `vscode` remains the compatibility default
-with the historical fixed RGB values. Terminal selections use ANSI `DarkGray`/`White`, not
-reverse-video: reverse also swaps per-span git decoration colors and turns a green status dot into
-a green background block. Keep every shared accent in `ui::Palette` so Explorer and Source Control
-cannot drift.
+Plugin panes cannot read herdr's private UI palette. **In this fork (schugazi) the `terminal`
+theme is hand-matched RGB** — herdr's `[theme.custom]` colors from `~/.config/herdr/config.toml`
+(lime `#5fff00` accent, `#304b39`/`#22372a` green-charcoal surfaces, `#8a8a8a` secondary text) on
+the WezTerm profile's black/`#c0c0c0` — because WezTerm's default ANSI slots (navy `#5455cb`
+blue, olive yellow) made the ANSI-named version clash with herdr. `vscode` remains the upstream
+default. Selections use a background + explicit foreground, not reverse-video: reverse also swaps
+per-span git decoration colors and turns a green status dot into a green background block. Keep
+every shared accent in `ui::Palette` so Explorer and Source Control cannot drift; secondary text
+uses `Palette::muted`, never `.dim()` (WezTerm's half intensity on black is unreadable at small
+sizes).
+
+Glyph coverage (JetBrainsMono Nerd Font **Mono**, the only NF installed on the WezTerm laptop):
+`⟳ ⇅ ↶ ⇩ ✧ ⎇ ◐◓◑◒ ✦ ★` are NOT in the font, so the terminal substitutes another font at another
+size/baseline mid-row. The material theme uses codicons instead (cod-sync EA77, cod-discard EAE2,
+cod-add EA60, …) and the sync spinner is braille. Check a new symbol before using it:
+`uv run --with fonttools python -c "…getBestCmap()…"` against the font file. Mono NF draws icons
+ONE cell wide, so activity chips are symmetric ` X ` (no trailing slack cell).
+
+Headless rendering on Linux (no Windows/WT needed): `/tmp`-style harness — run the binary in a
+PTY with `HERDR_PANE_ID= HERDR_SOCKET_PATH=/nonexistent HERDR_PLUGIN_STATE_DIR=<scratch>`, feed
+the output to `pyte`, and draw cells with Pillow using the real font file and WezTerm's default
+ANSI table (`000000 cc5555 55cc55 cdcd55 5455cb cc55cc 7acaca cccccc` / brights). pyte has no
+DIM attribute and its SGR parser sees the `2` in `38;2;r;g;b` — walk the params yourself.
 
 Light terminal backgrounds (`color_theme = light`, the third value the ⚙ Settings row cycles
 through — `ColorTheme::next()` is a rotation, not a toggle):
