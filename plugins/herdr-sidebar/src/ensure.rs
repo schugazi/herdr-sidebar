@@ -216,6 +216,79 @@ pub fn run(mode: Mode) -> std::io::Result<()> {
     Ok(())
 }
 
+/// Label of the fork's dedicated per-workspace sidebar tab.
+pub const SIDEBAR_TAB_LABEL: &str = "sidebar";
+
+/// The fork's `sidebar-tab` action (bound to `prefix+s`): jump to this
+/// workspace's "sidebar" tab, opening the unified sidebar as a new tab rooted
+/// at the focused pane's folder when there is none. Either way the tab is
+/// moved to the first slot.
+#[cfg(unix)]
+pub fn sidebar_tab() -> std::io::Result<()> {
+    use serde_json::{Value, json};
+    let parse = |text: &str| {
+        serde_json::from_str::<Value>(text.trim_start_matches('\u{feff}')).unwrap_or(Value::Null)
+    };
+    // Held until the tab exists AND its pane has reported identity, so the
+    // tab.created ensure hook sees a live sidebar and never docks a second.
+    let Some(_lock) = LaunchLock::acquire(true) else {
+        return Ok(());
+    };
+    let context = parse(&std::env::var("HERDR_PLUGIN_CONTEXT_JSON").unwrap_or_default());
+    let panes = parse(&ipc::call_text("pane.list", json!({}))?);
+    let panes = panes["result"]["panes"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    let focused = match context["focused_pane_id"].as_str() {
+        Some(id) => panes.iter().find(|p| p["pane_id"] == id),
+        None => panes.iter().find(|p| p["focused"] == true),
+    };
+    let Some(focused) = focused else {
+        return Ok(());
+    };
+    let Some(workspace) = focused["workspace_id"].as_str() else {
+        return Ok(());
+    };
+    let tabs = parse(&ipc::call_text(
+        "tab.list",
+        json!({ "workspace_id": workspace }),
+    )?);
+    let existing = tabs["result"]["tabs"]
+        .as_array()
+        .and_then(|tabs| tabs.iter().find(|t| t["label"] == SIDEBAR_TAB_LABEL))
+        .and_then(|t| t["tab_id"].as_str())
+        .map(str::to_string);
+    let tab_id = match existing {
+        Some(tab_id) => tab_id,
+        None => {
+            let cwd = focused["foreground_cwd"]
+                .as_str()
+                .or(focused["cwd"].as_str())
+                .unwrap_or_default();
+            let merged = crate::state::load_state().merged;
+            let pane = ipc::open_plugin_pane_tab(workspace, std::path::Path::new(cwd), merged)?;
+            let panes = parse(&ipc::call_text("pane.list", json!({}))?);
+            let Some(tab_id) = panes["result"]["panes"]
+                .as_array()
+                .and_then(|panes| panes.iter().find(|p| p["pane_id"] == pane.as_str()))
+                .and_then(|p| p["tab_id"].as_str())
+                .map(str::to_string)
+            else {
+                return Ok(());
+            };
+            ipc::call_text(
+                "tab.rename",
+                json!({ "tab_id": tab_id, "label": SIDEBAR_TAB_LABEL }),
+            )?;
+            tab_id
+        }
+    };
+    ipc::call_text("tab.move", json!({ "tab_id": tab_id, "insert_index": 0 }))?;
+    ipc::call_text("tab.focus", json!({ "tab_id": tab_id }))?;
+    Ok(())
+}
+
 pub fn request_close(panes_json: &str, pane_id: &str) -> std::io::Result<()> {
     if launch::pane_is_starting(panes_json, pane_id) {
         // No TUI event loop or in-memory draft exists yet.

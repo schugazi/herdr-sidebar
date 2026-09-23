@@ -140,6 +140,15 @@ title = "Quick Open"
 description = "Open or focus the sidebar and show the file picker."
 command = [".\\target\\release\\herdr-sidebar-ensure.exe", "--quick-open"]
 
+# schugazi fork: a dedicated first-position "sidebar" tab per workspace
+# (bound to prefix+s in ~/.config/herdr/config.toml).
+[[actions]]
+id = "sidebar-tab"
+platforms = ["linux", "macos"]
+title = "Sidebar tab"
+description = "Focus this workspace's first-position \"sidebar\" tab, opening it if needed."
+command = ["./target/release/herdr-sidebar", "--sidebar-tab"]
+
 # Refresh every workspace onto the latest builds after a rebuild.
 [[actions]]
 id = "redeploy"
