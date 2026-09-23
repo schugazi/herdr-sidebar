@@ -2925,8 +2925,9 @@ fn preview_spawn_env(control: &Path, inline: bool) -> serde_json::Value {
 /// Where an inline viewer pane goes: on the side of the sidebar AWAY from its
 /// dock edge, so the sidebar stays on its edge.
 ///
-/// - a neighbour on that side is split in half DOWNWARD, stacking the preview
-///   under it — a side-by-side split there made an awkward three-column tab
+/// - a neighbour on that side is split in half DOWNWARD and the fresh pane
+///   swapped into the top half, stacking the preview above it — a
+///   side-by-side split there made an awkward three-column tab
 ///   (user-rejected);
 /// - with no neighbour we split ourselves and give away everything past the
 ///   sidebar's column target, swapping only when the sidebar must end up on
@@ -2939,7 +2940,7 @@ fn inline_split_plan(layout_json: &str, pane_id: &str, inline: InlineSpawn) -> O
         return Some(SplitPlan {
             target,
             ratio: 0.5,
-            swap: false,
+            swap: true,
             down: true,
         });
     }
@@ -3602,11 +3603,11 @@ mod tests {
         {"pane_id":"w1:p2","rect":{"x":0,"y":0,"width":148,"height":50}},
         {"pane_id":"w1:p1","rect":{"x":148,"y":0,"width":32,"height":50}}"#;
 
-    /// The inline viewer stacks under the user's pane on whichever side is
+    /// The inline viewer stacks above the user's pane on whichever side is
     /// away from the dock edge — the sidebar must not be pushed off its own
     /// edge, and a side-by-side split would make a three-column tab.
     #[test]
-    fn an_inline_preview_stacks_under_the_neighbour_away_from_the_dock_edge() {
+    fn an_inline_preview_stacks_above_the_neighbour_away_from_the_dock_edge() {
         let left = inline_split_plan(
             &layout(SIDEBAR_LEFT),
             "w1:p1",
@@ -3621,7 +3622,7 @@ mod tests {
             SplitPlan {
                 target: "w1:p2".into(),
                 ratio: 0.5,
-                swap: false,
+                swap: true,
                 down: true
             }
         );
@@ -3640,7 +3641,7 @@ mod tests {
             SplitPlan {
                 target: "w1:p2".into(),
                 ratio: 0.5,
-                swap: false,
+                swap: true,
                 down: true
             }
         );

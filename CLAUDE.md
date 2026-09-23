@@ -770,7 +770,7 @@ setting are all gone.
   branches, tags).
 - `Preview opens in: pane` is an explicit opt-in that instead keeps one inline viewer
   in the sidebar's own tab and reuses it per caller tab. When the tab has a pane beside the
-  sidebar, the viewer stacks UNDER that pane (split down, fork change); only a sidebar alone in
+  sidebar, the viewer stacks ABOVE that pane (split down + swap, fork change); only a sidebar alone in
   its tab splits sideways, since a side-by-side split of the neighbour makes three columns. `tab` remains the default.
   Inline placement never parks or moves the user's panes to another tab, never claims
   `hs-preview-dedicated`, and `q`/Esc closes only the viewer pane. Placement is stamped
