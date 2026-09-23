@@ -513,6 +513,13 @@ HACKING.md — budget time for that before promising a patched build.
   Explorer gets its branch/ahead/behind state
   from the same one-at-a-time background status worker as decorations, but status polling stays
   available when decorations are disabled; ignored-path scans do not.
+- Fork-only `sidebar-tab` action (unix, `ensure::sidebar_tab`, bound to `prefix+s` in the
+  user's herdr config): per workspace, a tab labelled `sidebar` created with `tab.create` at the
+  workspace root, the sidebar docked into it through the normal `open` path (so width/dock side
+  follow state.json), moved to index 0, and the client landed on the sidebar via
+  `focus_tab_for_client` — plain `tab.focus` does NOT move a herdr 0.9 client. An existing tab
+  is reused; a dead/label-only sidebar in it is closed and re-docked (auto-open off means no hook
+  would heal it), recreating the tab if that close emptied it.
 - `dock_right` in the same state file (default false) drives the “Dock on the right” Settings
   row. Launch target/ratio/swap, resize direction, and full-height repair all mirror from that
   one persisted choice. Preview tabs inherit it when the `tab.created` hook docks their sidebar.
@@ -613,8 +620,10 @@ HACKING.md — budget time for that before promising a patched build.
   EABF, and cod-ellipsis EA7C; text-mode fallbacks remain one-cell symbols.
 - Custom terminal editors are opt-in. The saved command is parsed into argv and launched directly,
   never through a shell; `{file}` is substituted in arguments or appended when absent. Mouse file
-  clicks may open the command in a new herdr tab, while keyboard Enter always retains the built-in
-  preview. Editor panes are keyed by a canonical absolute-path hash in `hs-editor-path`, scoped to
+  clicks may open the command in a new herdr tab — or, with `Preview opens in: pane`, in a pane
+  split beside the sidebar (`viewer::split_beside_sidebar`, same geometry as the inline preview)
+  — while keyboard Enter always retains the built-in preview. The pane shell `exec`s the editor
+  runner on unix, so quitting the editor closes the pane. Editor panes are keyed by a canonical absolute-path hash in `hs-editor-path`, scoped to
   their workspace, and heartbeat every 5s against the common 20s stale limit; clicking that file
   again focuses the live pane through `focus_tab_for_client` instead of launching a duplicate. The
   token is cleared when the editor exits. The saved command wins over `HERDR_SIDEBAR_EDITOR`,

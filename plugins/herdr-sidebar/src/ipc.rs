@@ -147,44 +147,6 @@ pub fn open_plugin_pane(
     merged: bool,
     initial_activity: Option<&str>,
 ) -> std::io::Result<String> {
-    open_plugin_pane_at(
-        serde_json::json!({
-            "placement": "split",
-            "target_pane_id": target_pane_id,
-            "direction": "right",
-        }),
-        view,
-        cwd,
-        merged,
-        initial_activity,
-    )
-}
-
-/// The unified sidebar as a whole new tab in `workspace_id` (the fork's
-/// `sidebar-tab` action).
-#[cfg(unix)]
-pub fn open_plugin_pane_tab(
-    workspace_id: &str,
-    cwd: &std::path::Path,
-    merged: bool,
-) -> std::io::Result<String> {
-    open_plugin_pane_at(
-        serde_json::json!({ "placement": "tab", "workspace_id": workspace_id }),
-        crate::state::View::Explorer,
-        cwd,
-        merged,
-        None,
-    )
-}
-
-#[cfg(unix)]
-fn open_plugin_pane_at(
-    mut params: serde_json::Value,
-    view: crate::state::View,
-    cwd: &std::path::Path,
-    merged: bool,
-    initial_activity: Option<&str>,
-) -> std::io::Result<String> {
     let mut env = crate::state::spawn_env();
     if !cwd.as_os_str().is_empty()
         && let Some(env) = env.as_object_mut()
@@ -202,11 +164,18 @@ fn open_plugin_pane_at(
             serde_json::Value::String(initial_activity.to_string()),
         );
     }
-    params["plugin_id"] = "herdr-sidebar".into();
-    params["entrypoint"] = view.entrypoint().into();
-    params["focus"] = false.into();
-    params["env"] = env;
-    let response = call_text("plugin.pane.open", params)?;
+    let response = call_text(
+        "plugin.pane.open",
+        serde_json::json!({
+            "plugin_id": "herdr-sidebar",
+            "entrypoint": view.entrypoint(),
+            "placement": "split",
+            "target_pane_id": target_pane_id,
+            "direction": "right",
+            "focus": false,
+            "env": env,
+        }),
+    )?;
     let pane_id = crate::launch::plugin_pane_id(&response).ok_or_else(|| {
         std::io::Error::new(
             std::io::ErrorKind::InvalidData,

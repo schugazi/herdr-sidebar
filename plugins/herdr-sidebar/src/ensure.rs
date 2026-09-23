@@ -219,18 +219,20 @@ pub fn run(mode: Mode) -> std::io::Result<()> {
 /// Label of the fork's dedicated per-workspace sidebar tab.
 pub const SIDEBAR_TAB_LABEL: &str = "sidebar";
 
-/// The fork's `sidebar-tab` action (bound to `prefix+s`): jump to this
-/// workspace's "sidebar" tab, opening the unified sidebar as a new tab rooted
-/// at the focused pane's folder when there is none. Either way the tab is
-/// moved to the first slot.
+/// The fork's `sidebar-tab` action (bound to `prefix+s`): this workspace's
+/// first-position "sidebar" tab — a shell at the workspace root with the
+/// sidebar docked beside it at its configured width (the normal `open` dock).
+/// An existing tab is reused; a missing or dead sidebar in it is re-docked
+/// (a server restart restores the tab label, not the TUI, and with auto-open
+/// off no hook would heal it). Always lands the client on the sidebar pane.
 #[cfg(unix)]
 pub fn sidebar_tab() -> std::io::Result<()> {
     use serde_json::{Value, json};
     let parse = |text: &str| {
         serde_json::from_str::<Value>(text.trim_start_matches('\u{feff}')).unwrap_or(Value::Null)
     };
-    // Held until the tab exists AND its pane has reported identity, so the
-    // tab.created ensure hook sees a live sidebar and never docks a second.
+    // Held until the sidebar has reported identity, so the tab.created ensure
+    // hook sees a live sidebar and never docks a second.
     let Some(_lock) = LaunchLock::acquire(true) else {
         return Ok(());
     };
@@ -250,42 +252,67 @@ pub fn sidebar_tab() -> std::io::Result<()> {
     let Some(workspace) = focused["workspace_id"].as_str() else {
         return Ok(());
     };
-    let tabs = parse(&ipc::call_text(
-        "tab.list",
-        json!({ "workspace_id": workspace }),
-    )?);
-    let existing = tabs["result"]["tabs"]
-        .as_array()
-        .and_then(|tabs| tabs.iter().find(|t| t["label"] == SIDEBAR_TAB_LABEL))
-        .and_then(|t| t["tab_id"].as_str())
-        .map(str::to_string);
-    let tab_id = match existing {
-        Some(tab_id) => tab_id,
-        None => {
-            let cwd = focused["foreground_cwd"]
-                .as_str()
-                .or(focused["cwd"].as_str())
-                .unwrap_or_default();
-            let merged = crate::state::load_state().merged;
-            let pane = ipc::open_plugin_pane_tab(workspace, std::path::Path::new(cwd), merged)?;
-            let panes = parse(&ipc::call_text("pane.list", json!({}))?);
-            let Some(tab_id) = panes["result"]["panes"]
-                .as_array()
-                .and_then(|panes| panes.iter().find(|p| p["pane_id"] == pane.as_str()))
-                .and_then(|p| p["tab_id"].as_str())
-                .map(str::to_string)
-            else {
-                return Ok(());
-            };
-            ipc::call_text(
-                "tab.rename",
-                json!({ "tab_id": tab_id, "label": SIDEBAR_TAB_LABEL }),
-            )?;
-            tab_id
+    let root = context["workspace_cwd"]
+        .as_str()
+        .or(focused["cwd"].as_str())
+        .unwrap_or_default();
+    let live_sidebar = |panes_json: &str, tab_id: &str| {
+        let decision = launch::launch_decision_in(panes_json, crate::state::unix_now(), tab_id);
+        match decision.split_once(' ') {
+            Some(("FOCUS" | "CLOSE", id)) => Ok(id.to_string()),
+            Some(("REPLACE", dead)) => Err(Some(dead.to_string())),
+            _ => Err(None),
         }
     };
-    ipc::call_text("tab.move", json!({ "tab_id": tab_id, "insert_index": 0 }))?;
-    ipc::call_text("tab.focus", json!({ "tab_id": tab_id }))?;
+    // Two passes: closing a dead sidebar that was the tab's only pane closes
+    // the tab too, and the second pass recreates it.
+    for _ in 0..2 {
+        let tabs = parse(&ipc::call_text(
+            "tab.list",
+            json!({ "workspace_id": workspace }),
+        )?);
+        let existing = tabs["result"]["tabs"]
+            .as_array()
+            .and_then(|tabs| tabs.iter().find(|t| t["label"] == SIDEBAR_TAB_LABEL))
+            .and_then(|t| t["tab_id"].as_str())
+            .map(str::to_string);
+        let tab_id = match existing {
+            Some(tab_id) => tab_id,
+            None => {
+                let created = parse(&ipc::call_text(
+                    "tab.create",
+                    json!({
+                        "workspace_id": workspace,
+                        "label": SIDEBAR_TAB_LABEL,
+                        "cwd": root,
+                        "focus": false,
+                    }),
+                )?);
+                let Some(tab_id) = created["result"]["tab"]["tab_id"].as_str() else {
+                    return Ok(());
+                };
+                tab_id.to_string()
+            }
+        };
+        let panes_json = ipc::call_text("pane.list", json!({}))?;
+        let sidebar = match live_sidebar(&panes_json, &tab_id) {
+            Ok(id) => id,
+            Err(Some(dead)) => {
+                ipc::call_text("pane.close", json!({ "pane_id": dead }))?;
+                continue;
+            }
+            Err(None) => {
+                open(&panes_json, false, &tab_id, View::Explorer, None)?;
+                let panes_json = ipc::call_text("pane.list", json!({}))?;
+                live_sidebar(&panes_json, &tab_id).unwrap_or_default()
+            }
+        };
+        ipc::call_text("tab.move", json!({ "tab_id": tab_id, "insert_index": 0 }))?;
+        // `tab.focus` only moves the server's record; herdr 0.9 clients follow
+        // a real pane-focus transition.
+        crate::viewer::focus_tab_for_client(&tab_id, Some(&sidebar));
+        return Ok(());
+    }
     Ok(())
 }
 

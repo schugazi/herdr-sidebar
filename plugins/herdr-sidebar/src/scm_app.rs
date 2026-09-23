@@ -3490,14 +3490,10 @@ impl App {
             Some(repo) if self.repos.len() == 1 => repo.name.clone(),
             _ => "Source Control".to_string(),
         };
-        let left = [
-            Span::styled(
-                format!(" {} ", repo_icon(self.theme)),
-                Style::default().fg(palette().header_accent),
-            ),
-            Span::styled(title, Style::default().bold()),
-        ];
-        let left_w: usize = left.iter().map(Span::width).sum();
+        let icon = Span::styled(
+            format!(" {} ", repo_icon(self.theme)),
+            Style::default().fg(palette().header_accent),
+        );
         // With several repos visible, the header names the one the commit box
         // and sync act on; a single repo shows branch + ahead/behind arrows.
         let right_text = match self.active_repo() {
@@ -3549,12 +3545,17 @@ impl App {
         } else {
             (Vec::new(), 0)
         };
-        // The branch text yields to the buttons and gear in narrow panes.
-        let avail = (area.width as usize)
-            .saturating_sub(left_w + actions_w + gear_w)
-            .saturating_sub(1);
-        let branch_text = truncate_to(right_text, avail);
+        // The branch is this view's only branch-picker target, so the TITLE
+        // yields in narrow panes (keeping at least a few cells), not it.
+        let fixed = icon.width() + actions_w + gear_w + 1;
+        let branch_text = truncate_to(right_text, (area.width as usize).saturating_sub(fixed + 4));
         let branch_width = Span::raw(branch_text.as_str()).width();
+        let title = truncate_to(
+            title,
+            (area.width as usize).saturating_sub(fixed + branch_width),
+        );
+        let left = [icon, Span::styled(title, Style::default().bold())];
+        let left_w: usize = left.iter().map(Span::width).sum();
         let pad = (area.width as usize)
             .saturating_sub(left_w + branch_width + actions_w + gear_w)
             .max(1);

@@ -454,42 +454,65 @@ pub fn open_in_editor_tab(my_pane_id: &str, root: &Path, file: &Path) -> io::Res
         EDITOR_FILE_TOKEN_ENV.into(),
         serde_json::Value::String(file_token.clone()),
     );
-    let label = file
-        .file_name()
-        .unwrap_or(file.as_os_str())
-        .to_string_lossy();
-    let response = crate::ipc::call_text(
-        "tab.create",
-        serde_json::json!({
-            "workspace_id": workspace_id,
-            "label": format!("{label} · editor"),
-            "cwd": root.display().to_string(),
-            "focus": false,
-            "env": env,
-        }),
-    )?;
-    let (tab_id, pane_id) = tab_create_ids(&response).ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::InvalidData,
-            "editor tab opened without pane metadata",
-        )
-    })?;
+    // Fork: "Preview opens in: pane" puts the editor in a pane beside the
+    // sidebar (the inline-preview slot) instead of its own tab.
+    let in_pane =
+        crate::state::load_state().preview_placement == crate::state::PreviewPlacement::Pane;
+    let (tab_id, pane_id) = if in_pane {
+        let pane_id = crate::viewer::split_beside_sidebar(my_pane_id, root, env.into())
+            .map_err(io::Error::other)?;
+        (None, pane_id)
+    } else {
+        let label = file
+            .file_name()
+            .unwrap_or(file.as_os_str())
+            .to_string_lossy();
+        let response = crate::ipc::call_text(
+            "tab.create",
+            serde_json::json!({
+                "workspace_id": workspace_id,
+                "label": format!("{label} · editor"),
+                "cwd": root.display().to_string(),
+                "focus": false,
+                "env": env,
+            }),
+        )?;
+        let (tab_id, pane_id) = tab_create_ids(&response).ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "editor tab opened without pane metadata",
+            )
+        })?;
+        (Some(tab_id), pane_id)
+    };
+    let cleanup = || match &tab_id {
+        Some(tab_id) => crate::ipc::call_text("tab.close", serde_json::json!({ "tab_id": tab_id })),
+        None => crate::ipc::call_text("pane.close", serde_json::json!({ "pane_id": pane_id })),
+    };
     if let Err(error) = report_editor_identity(&pane_id, Some(&file_token)) {
-        let _ = crate::ipc::call_text("tab.close", serde_json::json!({ "tab_id": tab_id }));
+        let _ = cleanup();
         return Err(error);
     }
+    // `exec` on unix: quitting the editor closes its pane/tab instead of
+    // leaving a stray shell behind. Windows shells keep the bare command.
+    let exec = if cfg!(unix) { "exec " } else { "" };
     if let Err(error) = crate::ipc::call_text(
         "pane.send_input",
         serde_json::json!({
             "pane_id": pane_id,
-            "text": format!("{} --run-custom-editor", crate::state::EXECUTABLE_NAME),
+            "text": format!("{exec}{} --run-custom-editor", crate::state::EXECUTABLE_NAME),
             "keys": ["Enter"],
         }),
     ) {
-        let _ = crate::ipc::call_text("tab.close", serde_json::json!({ "tab_id": tab_id }));
+        let _ = cleanup();
         return Err(error);
     }
-    crate::viewer::focus_tab_for_client(&tab_id, Some(&pane_id));
+    match &tab_id {
+        Some(tab_id) => crate::viewer::focus_tab_for_client(tab_id, Some(&pane_id)),
+        None => {
+            let _ = crate::ipc::call_text("pane.focus", serde_json::json!({ "pane_id": pane_id }));
+        }
+    }
     Ok(())
 }
 

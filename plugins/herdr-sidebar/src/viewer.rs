@@ -2712,6 +2712,26 @@ fn spawn_viewer_pane(
             }
         }
     };
+    let new_pane = split_by_plan(
+        &plan,
+        spawn_cwd,
+        preview_spawn_env(&control, inline.is_some()),
+    )
+    .map_err(|error| {
+        let _ = std::fs::remove_file(&control);
+        format!("preview {error}")
+    })?;
+    register_viewer_pane(&new_pane, &control, doc_key, inline.is_some())?;
+    Ok((new_pane, control))
+}
+
+/// Run one [`SplitPlan`]: split, then swap into place when the plan says so.
+/// A pane that could not be positioned is closed again.
+fn split_by_plan(
+    plan: &SplitPlan,
+    cwd: &Path,
+    env: serde_json::Value,
+) -> Result<String, &'static str> {
     let response = ipc::call_text(
         "pane.split",
         serde_json::json!({
@@ -2719,17 +2739,14 @@ fn spawn_viewer_pane(
             "direction": "right",
             "ratio": plan.ratio,
             "focus": false,
-            "cwd": spawn_cwd.display().to_string(),
-            "env": preview_spawn_env(&control, inline.is_some()),
+            "cwd": cwd.display().to_string(),
+            "env": env,
         }),
     );
     let new_pane = response
         .ok()
         .and_then(|r| crate::launch::split_pane_id(&r))
-        .ok_or_else(|| {
-            let _ = std::fs::remove_file(&control);
-            "preview pane failed to open".to_string()
-        })?;
+        .ok_or("pane failed to open")?;
     if plan.swap
         && !ipc::call_text(
             "pane.swap",
@@ -2737,11 +2754,31 @@ fn spawn_viewer_pane(
         )
         .is_ok_and(|response| ipc_succeeded(&response))
     {
-        cleanup_spawn(&new_pane, &control);
-        return Err("preview pane could not be positioned".into());
+        let _ = ipc::call_text("pane.close", serde_json::json!({ "pane_id": new_pane }));
+        return Err("pane could not be positioned");
     }
-    register_viewer_pane(&new_pane, &control, doc_key, inline.is_some())?;
-    Ok((new_pane, control))
+    Ok(new_pane)
+}
+
+/// A plain pane in the inline-preview slot beside the sidebar (`sidebar |
+/// new | rest`, mirrored for a right dock), for running something other than
+/// the viewer there — the fork's custom editor under "Preview opens in:
+/// pane". Focus is left where it was.
+pub fn split_beside_sidebar(
+    my_pane_id: &str,
+    cwd: &Path,
+    env: serde_json::Value,
+) -> Result<String, String> {
+    let state = crate::state::load_state();
+    let inline = InlineSpawn {
+        dock_right: state.dock_right,
+        sidebar_cols: state.sidebar_width,
+    };
+    let plan = ipc::call_text("pane.layout", serde_json::json!({ "pane_id": my_pane_id }))
+        .ok()
+        .and_then(|json| inline_split_plan(&json, my_pane_id, inline))
+        .unwrap_or_else(|| fallback_inline_split_plan(my_pane_id, inline));
+    split_by_plan(&plan, cwd, env).map_err(|error| format!("editor {error}"))
 }
 
 /// Spawn the viewer's shell pane as the ROOT pane of a brand-new tab. This is
