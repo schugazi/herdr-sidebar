@@ -2646,9 +2646,6 @@ fn preview_origin_tab(previews: &[PreviewPane], caller_tab_id: &str) -> String {
         .unwrap_or_else(|| caller_tab_id.to_string())
 }
 
-/// Split a viewer pane directly to the caller's right: split the right
-/// NEIGHBOR and swap the fresh pane into its left slot (split only goes
-/// right/down), so the layout reads sidebar | preview | rest.
 /// Geometry inputs for an inline spawn: which edge the sidebar is docked at
 /// and how wide it wants to stay.
 #[derive(Clone, Copy)]
@@ -2657,13 +2654,15 @@ struct InlineSpawn {
     sidebar_cols: u16,
 }
 
-/// One `pane.split` invocation: what to split, the ORIGINAL pane's share, and
-/// whether the fresh pane has to be swapped into the split target's slot.
+/// One `pane.split` invocation: what to split, the ORIGINAL pane's share,
+/// whether the fresh pane has to be swapped into the split target's slot, and
+/// whether it stacks below the target instead of beside it.
 #[derive(Clone, Debug, PartialEq)]
 struct SplitPlan {
     target: String,
     ratio: f64,
     swap: bool,
+    down: bool,
 }
 
 /// A legal self-split when `pane.layout` cannot describe the real geometry.
@@ -2674,6 +2673,7 @@ fn fallback_inline_split_plan(pane_id: &str, inline: InlineSpawn) -> SplitPlan {
         target: pane_id.to_string(),
         ratio: if inline.dock_right { 0.7 } else { 0.3 },
         swap: inline.dock_right,
+        down: false,
     }
 }
 
@@ -2703,11 +2703,13 @@ fn spawn_viewer_pane(
                     target,
                     ratio: 0.5,
                     swap: true,
+                    down: false,
                 },
                 None => SplitPlan {
                     target: my_pane_id.to_string(),
                     ratio: 0.3,
                     swap: false,
+                    down: false,
                 },
             }
         }
@@ -2736,7 +2738,7 @@ fn split_by_plan(
         "pane.split",
         serde_json::json!({
             "target_pane_id": plan.target,
-            "direction": "right",
+            "direction": if plan.down { "down" } else { "right" },
             "ratio": plan.ratio,
             "focus": false,
             "cwd": cwd.display().to_string(),
@@ -2760,8 +2762,8 @@ fn split_by_plan(
     Ok(new_pane)
 }
 
-/// A plain pane in the inline-preview slot beside the sidebar (`sidebar |
-/// new | rest`, mirrored for a right dock), for running something other than
+/// A plain pane in the inline-preview slot (see [`inline_split_plan`]), for
+/// running something other than
 /// the viewer there — the fork's custom editor under "Preview opens in:
 /// pane". Focus is left where it was.
 pub fn split_beside_sidebar(
@@ -2921,16 +2923,14 @@ fn preview_spawn_env(control: &Path, inline: bool) -> serde_json::Value {
 }
 
 /// Where an inline viewer pane goes: on the side of the sidebar AWAY from its
-/// dock edge, so the sidebar stays on its edge and the layout reads
-/// `sidebar | preview | rest` (or the mirror image when docked right).
+/// dock edge, so the sidebar stays on its edge.
 ///
-/// Splitting only goes right, so the two cases differ:
-/// - a neighbour on that side is split in half and the fresh pane takes the
-///   slot nearest us (a right dock needs no swap: splitting the LEFT
-///   neighbour already lands the new pane between it and the sidebar);
+/// - a neighbour on that side is split in half DOWNWARD, stacking the preview
+///   under it — a side-by-side split there made an awkward three-column tab
+///   (user-rejected);
 /// - with no neighbour we split ourselves and give away everything past the
 ///   sidebar's column target, swapping only when the sidebar must end up on
-///   the right.
+///   the right (split only goes right/down).
 ///
 /// `None` when the layout can't be read — the caller falls back to a plain
 /// self-split.
@@ -2939,7 +2939,8 @@ fn inline_split_plan(layout_json: &str, pane_id: &str, inline: InlineSpawn) -> O
         return Some(SplitPlan {
             target,
             ratio: 0.5,
-            swap: !inline.dock_right,
+            swap: false,
+            down: true,
         });
     }
     let my_width = pane_width(layout_json, pane_id)?;
@@ -2955,6 +2956,7 @@ fn inline_split_plan(layout_json: &str, pane_id: &str, inline: InlineSpawn) -> O
             share
         },
         swap: inline.dock_right,
+        down: false,
     })
 }
 
@@ -3600,11 +3602,11 @@ mod tests {
         {"pane_id":"w1:p2","rect":{"x":0,"y":0,"width":148,"height":50}},
         {"pane_id":"w1:p1","rect":{"x":148,"y":0,"width":32,"height":50}}"#;
 
-    /// The inline viewer goes between the sidebar and the user's panes, on
-    /// whichever side is away from the dock edge — the sidebar must not be
-    /// pushed off its own edge.
+    /// The inline viewer stacks under the user's pane on whichever side is
+    /// away from the dock edge — the sidebar must not be pushed off its own
+    /// edge, and a side-by-side split would make a three-column tab.
     #[test]
-    fn an_inline_preview_splits_the_neighbour_away_from_the_dock_edge() {
+    fn an_inline_preview_stacks_under_the_neighbour_away_from_the_dock_edge() {
         let left = inline_split_plan(
             &layout(SIDEBAR_LEFT),
             "w1:p1",
@@ -3614,14 +3616,13 @@ mod tests {
             },
         )
         .unwrap();
-        // Split only goes right, so the neighbour is halved and the fresh
-        // pane swapped into the half nearest us.
         assert_eq!(
             left,
             SplitPlan {
                 target: "w1:p2".into(),
                 ratio: 0.5,
-                swap: true
+                swap: false,
+                down: true
             }
         );
 
@@ -3634,14 +3635,13 @@ mod tests {
             },
         )
         .unwrap();
-        // Splitting the LEFT neighbour rightwards already lands the new pane
-        // between it and the sidebar — no swap needed.
         assert_eq!(
             right,
             SplitPlan {
                 target: "w1:p2".into(),
                 ratio: 0.5,
-                swap: false
+                swap: false,
+                down: true
             }
         );
     }
@@ -3706,7 +3706,8 @@ mod tests {
             SplitPlan {
                 target: "w1:p1".into(),
                 ratio: 0.3,
-                swap: false
+                swap: false,
+                down: false
             }
         );
 
@@ -3722,7 +3723,8 @@ mod tests {
             SplitPlan {
                 target: "w1:p1".into(),
                 ratio: 0.7,
-                swap: true
+                swap: true,
+                down: false
             }
         );
     }

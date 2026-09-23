@@ -769,7 +769,9 @@ setting are all gone.
   Source Control view (staged/unstaged diffs, and git-graph refs — commits, stashes,
   branches, tags).
 - `Preview opens in: pane` is an explicit opt-in that instead keeps one inline viewer
-  in the sidebar's own tab and reuses it per caller tab. `tab` remains the default.
+  in the sidebar's own tab and reuses it per caller tab. When the tab has a pane beside the
+  sidebar, the viewer stacks UNDER that pane (split down, fork change); only a sidebar alone in
+  its tab splits sideways, since a side-by-side split of the neighbour makes three columns. `tab` remains the default.
   Inline placement never parks or moves the user's panes to another tab, never claims
   `hs-preview-dedicated`, and `q`/Esc closes only the viewer pane. Placement is stamped
   on the viewer with `hs-preview-inline`; do not infer it later from mutable settings.
