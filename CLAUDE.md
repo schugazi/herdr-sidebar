@@ -708,8 +708,16 @@ HACKING.md — budget time for that before promising a patched build.
   levels down (`.git` dir or file), skipping `target`/`node_modules`/`.claude` (the agent
   worktrees under `.claude/worktrees` would otherwise show up as repos). With >1 repo the
   layout mirrors VS Code's: each repo section carries its OWN inline message box (3-line
-  bordered list row) and ✓ Commit button, and the repo header row shows `⎇branch*` (star =
-  dirty) plus clickable ⟳ sync / ✓ commit icons in the fixed last-6 columns. List rows now
+  bordered list row) and one-row ✓ Commit button, and the repo header row (tinted
+  `keycap_bg` band, accent name when active) shows `⎇branch*` (star = dirty) plus clickable
+  ⟳ sync / ✓ commit icons in the fixed last-6 columns. A `Repo::quiet()` repo (clean, no
+  draft, nothing to sync) renders as its header ONLY (not foldable), and an empty Changes
+  header is hidden in multi-repo mode when nothing is staged — user-reported: a clean repo's
+  box/button/"Changes 0" sat directly above the NEXT repo's header and read as belonging to
+  it. With staged files the empty Changes header stays: it holds the only Stash Changes
+  action. Keyboard focus in the active repo's box/button (`c`/Tab/Shift+Tab rebuild at once)
+  keeps them shown even when quiet. `commit_repo` checks "no staged changes" before "empty
+  message" so it never focuses a hidden box. List rows now
   have VARIABLE HEIGHT — mouse hit-testing walks `Row::height()`, and j/k skip the widget
   rows (`Row::selectable()`). The ✧ suggest / S sync keys act on the ACTIVE repo — the one
   the selection is in (named in the panel header).

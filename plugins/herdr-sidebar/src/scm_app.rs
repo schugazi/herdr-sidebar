@@ -337,6 +337,16 @@ impl Repo {
         };
         format!("{}{dirty}", self.status.branch)
     }
+
+    /// Nothing to commit, draft, or sync: the multi-repo list shows only the
+    /// header, so a clean repo's empty box/button/section can't read as
+    /// belonging to its neighbour.
+    fn quiet(&self) -> bool {
+        self.status.staged.is_empty()
+            && self.status.unstaged.is_empty()
+            && self.message.is_empty()
+            && !sync_is_primary(&self.status)
+    }
 }
 
 fn commit_draft_present<'a>(messages: impl IntoIterator<Item = &'a [char]>) -> bool {
@@ -1199,7 +1209,10 @@ impl App {
         for (r, repo) in self.repos.iter().enumerate() {
             if multi {
                 self.rows.push(Row::RepoHeader(r));
-                if repo.collapsed {
+                // Keyboard focus inside the active repo's box/button keeps
+                // them shown, even for a quiet repo.
+                let editing = r == self.active && self.focus != Focus::List;
+                if repo.collapsed || (repo.quiet() && !editing) {
                     continue;
                 }
                 // VS Code gives every repo its own message box and Commit
@@ -1215,6 +1228,11 @@ impl App {
                         self.rows.push(Row::Staged(r, i));
                     }
                 }
+            }
+            // An empty "Changes 0" between repos is noise; with staged files
+            // it stays, as its header holds the only Stash Changes action.
+            if multi && repo.status.unstaged.is_empty() && repo.status.staged.is_empty() {
+                continue;
             }
             self.rows.push(Row::ChangesHeader(r));
             if !repo.changes_collapsed {
@@ -1433,9 +1451,15 @@ impl App {
             KeyCode::Char('q') => return Some(Exit::Quit),
             // Esc never quits the sidebar — it closes the preview instead.
             KeyCode::Esc => self.close_preview(),
-            KeyCode::Tab => self.focus = Focus::Message,
-            KeyCode::BackTab => self.focus = Focus::Commit,
-            KeyCode::Char('c') => self.focus = Focus::Message,
+            // Rebuild so a quiet repo's hidden box/button appears at once.
+            KeyCode::Tab | KeyCode::Char('c') => {
+                self.focus = Focus::Message;
+                self.rebuild();
+            }
+            KeyCode::BackTab => {
+                self.focus = Focus::Commit;
+                self.rebuild();
+            }
             KeyCode::Up | KeyCode::Char('k') => self.move_by(-1),
             KeyCode::Down | KeyCode::Char('j') => self.move_by(1),
             KeyCode::PageUp => self.move_by(-(self.page as isize)),
@@ -3047,6 +3071,8 @@ impl App {
             // Widget rows aren't keyboard-selectable; nothing to activate.
             Row::Message(_) | Row::Commit(_) => {}
             Row::DrawerLine(kind, i) => self.open_drawer_ref(kind, i),
+            // A quiet repo has nothing to fold (and shows no arrow).
+            Row::RepoHeader(r) if self.repos[r].quiet() => {}
             Row::RepoHeader(r) => {
                 self.repos[r].collapsed = !self.repos[r].collapsed;
                 self.rebuild();
@@ -3176,15 +3202,17 @@ impl App {
         let Some(repo) = self.repos.get_mut(index) else {
             return;
         };
+        // Staged check first: a clean repo hides its message box, so it must
+        // not be sent there to type.
+        if repo.status.staged.is_empty() {
+            self.flash = Some(("No staged changes to commit.".to_string(), true));
+            return;
+        }
         let message: String = repo.message.iter().collect();
         if message.trim().is_empty() {
             self.active = index;
             self.flash = Some(("Commit message is empty.".to_string(), true));
             self.focus = Focus::Message;
-            return;
-        }
-        if repo.status.staged.is_empty() {
-            self.flash = Some(("No staged changes to commit.".to_string(), true));
             return;
         }
         match repo.git.commit(message.trim()) {
@@ -3205,8 +3233,8 @@ impl App {
     fn row_height(&self, row: Row) -> u16 {
         match row {
             Row::Message(r) => 2 + self.message_rows_inline(r) as u16,
-            // A breathing row above and below the button.
-            Row::Commit(_) => 3,
+            // One row: the multi-repo list is already tall with a box per repo.
+            Row::Commit(_) => 1,
             _ => 1,
         }
     }
@@ -4096,9 +4124,14 @@ fn repo_header_item(
     width: usize,
     branch_hovered: bool,
 ) -> ListItem<'static> {
-    let arrow = if repo.collapsed { "▸" } else { "▾" };
+    // A quiet repo has nothing to expand, so no disclosure arrow.
+    let arrow = match (repo.quiet(), repo.collapsed) {
+        (true, _) => " ",
+        (false, true) => "▸",
+        (false, false) => "▾",
+    };
     let name_style = if active {
-        Style::default().bold()
+        Style::default().bold().fg(palette().header_accent)
     } else {
         Style::default().fg(palette().muted).bold()
     };
@@ -4137,6 +4170,9 @@ fn repo_header_item(
             Style::default().fg(palette().muted),
         ),
     ]))
+    // A tinted band marks where each repo's section starts; hover/selection
+    // styles replace it.
+    .style(Style::default().bg(palette().keycap_bg))
 }
 
 fn repo_header_branch_text(repo: &Repo, theme: IconTheme) -> String {
@@ -4372,27 +4408,14 @@ fn commit_button_item(
     if focused {
         style = style.add_modifier(Modifier::BOLD);
     }
-    let cap_style = Style::default().fg(bg);
-    ListItem::new(vec![
-        Line::from(vec![
-            Span::raw(" "),
-            Span::styled("▄".repeat(button_width), cap_style),
-            Span::raw(" "),
-        ]),
-        Line::from(vec![
-            Span::raw(" "),
-            Span::styled(
-                format!("{}{label}{}", " ".repeat(left_pad), " ".repeat(right_pad)),
-                style,
-            ),
-            Span::raw(" "),
-        ]),
-        Line::from(vec![
-            Span::raw(" "),
-            Span::styled("▀".repeat(button_width), cap_style),
-            Span::raw(" "),
-        ]),
-    ])
+    ListItem::new(Line::from(vec![
+        Span::raw(" "),
+        Span::styled(
+            format!("{}{label}{}", " ".repeat(left_pad), " ".repeat(right_pad)),
+            style,
+        ),
+        Span::raw(" "),
+    ]))
 }
 
 /// A collapsible section header; `count` renders as a right-aligned badge
@@ -4621,6 +4644,29 @@ mod tests {
             ..status
         };
         assert!(!sync_is_primary(&dirty));
+    }
+
+    #[test]
+    fn only_clean_undrafted_in_sync_repos_are_quiet() {
+        let git = Git::discover(Path::new(env!("CARGO_MANIFEST_DIR"))).unwrap();
+        let mut repo = Repo::new(git);
+        repo.status = Status::default();
+        assert!(repo.quiet());
+        repo.message = vec!['x'];
+        assert!(!repo.quiet(), "a draft keeps its box");
+        repo.message.clear();
+        repo.status.has_upstream = true;
+        repo.status.ahead = 1;
+        assert!(!repo.quiet(), "a diverged repo keeps its Sync button");
+        repo.status = Status {
+            staged: vec![FileEntry {
+                path: "a".into(),
+                orig: None,
+                letter: 'M',
+            }],
+            ..Status::default()
+        };
+        assert!(!repo.quiet());
     }
 
     #[test]
