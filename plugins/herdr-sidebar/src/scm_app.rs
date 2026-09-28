@@ -313,6 +313,14 @@ fn drawer_git_spec(dref: &DrawerRef) -> Option<String> {
     }
 }
 
+/// What a click/Enter previews with `git show`; remote and worktree rows don't.
+fn drawer_show_spec(dref: &DrawerRef) -> Option<String> {
+    match dref {
+        DrawerRef::Remote { .. } | DrawerRef::Worktree(_) => None,
+        _ => drawer_git_spec(dref),
+    }
+}
+
 fn drawer_checkout_args(dref: &DrawerRef, spec: &str, git_spec: &str) -> Option<Vec<String>> {
     match dref {
         // Plain `checkout` so a remote row still detaches at its commit (`switch`
@@ -2706,7 +2714,7 @@ impl App {
         let Some(spec) = self.drawers[kind.index()]
             .refs
             .get(index)
-            .and_then(drawer_git_spec)
+            .and_then(drawer_show_spec)
         else {
             return;
         };
@@ -2784,7 +2792,7 @@ impl App {
             }
             Row::DrawerLine(kind, i) => {
                 let repo = self.repos.get(self.active)?;
-                let spec = drawer_git_spec(self.drawers[kind.index()].refs.get(*i)?)?;
+                let spec = drawer_show_spec(self.drawers[kind.index()].refs.get(*i)?)?;
                 let path = (*kind == Drawer::FileHistory)
                     .then(|| self.history_target.clone())
                     .flatten();
@@ -5045,6 +5053,14 @@ mod tests {
             .to_string();
 
         assert!(drawer_reset_args("--hard").is_none());
+        assert!(drawer_show_spec(&DrawerRef::Worktree("/tmp/wt".into())).is_none());
+        assert!(
+            drawer_show_spec(&DrawerRef::Remote {
+                name: "origin".into(),
+                url: String::new(),
+            })
+            .is_none()
+        );
         let dash = DrawerRef::Branch {
             name: "-f".into(),
             current: false,
